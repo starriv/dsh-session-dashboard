@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Stats",
+    "description": "Token usage, estimated cost and DSH runtime health from local session logs."
+  }
+}

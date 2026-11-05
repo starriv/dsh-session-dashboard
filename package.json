@@ -1,0 +1,81 @@
+{
+  "name": "@local/dsh-session-stats",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Session stats dashboard plugin for the DeepSeek Harness Web GUI: token usage, estimated cost, composition and host runtime health.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "host/*.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "src/**/*",
+    "scripts/*.mjs",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/*.png",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    },
+    "manifestVersion": 1
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "statistics",
+    "token-usage"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "pretest": "node scripts/build-client.mjs",
+    "test": "node scripts/test.mjs"
+  },
+  "engines": {
+    "node": ">=22.15.0",
+    "dsh": ">=0.2.1-rc.5"
+  },
+  "devDependencies": {
+    "d3-array": "3.2.5",
+    "d3-scale": "4.0.3",
+    "d3-shape": "3.2.1",
+    "esbuild": "0.28.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "jsdom": "27.4.0"
+  },
+  "author": "starriv",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/starriv/dsh-session-dashboard.git"
+  },
+  "homepage": "https://github.com/starriv/dsh-session-dashboard#readme",
+  "bugs": {
+    "url": "https://github.com/starriv/dsh-session-dashboard/issues"
+  }
+}

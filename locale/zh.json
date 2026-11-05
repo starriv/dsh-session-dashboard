@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "会话统计",
+    "description": "基于本机会话日志的 Token 用量、费用估算与 DSH 运行状态面板。"
+  }
+}
