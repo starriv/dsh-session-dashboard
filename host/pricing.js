@@ -1,27 +1,29 @@
 /**
- * DeepSeek list-price estimate.
+ * Model-price estimate (not an actual provider invoice).
  *
- * Prices are CNY per one million tokens and are deliberately data, not logic:
- * the default table is the shipped list-price snapshot, and a patch can replace
- * or disable single models without touching code. Each usage sample is priced
- * at its own timestamp because DeepSeek bills peak and idle windows
- * differently (idle defaults to half price).
+ * Prices are CNY per one million tokens. The existing DeepSeek snapshot and
+ * fallback keep their original behavior. GPT-6 Astra uses a documented
+ * Token Usage snapshot, with flat all-day rates and per-request context tiers.
+ * Profile pricing overrides still take precedence over built-in entries.
  */
 
 import { resolveTimeZone, zonedParts } from './time.js'
+import { ASTRA_PRICE_ENTRY, ASTRA_PRICE_SOURCE } from './astra-price-snapshot.js'
 
 const PEAK_FLASH = { cacheRead: 0.04, input: 2, output: 8, cacheWrite: 2 }
 const PEAK_PRO = { cacheRead: 0.3, input: 9, output: 13.5, cacheWrite: 9 }
 
 /**
- * Built-in snapshot. Shape: model key -> { peak, idle? }. A missing `idle`
- * entry is resolved to half of `peak`, the published off-peak rule.
+ * Built-in snapshot. Entries support peak/idle and per-request contextTiers.
+ * A missing idle tier is half of peak for legacy entries; flat:true models
+ * keep peak rates all day, including after partial profile overrides.
  */
 export const DEFAULT_PRICE_TABLE = {
   'deepseek-flash': { peak: PEAK_FLASH },
   'deepseek-v4-flash': { peak: PEAK_FLASH },
   'deepseek-v4-flash-vision-exp': { peak: PEAK_FLASH },
   'deepseek-v4-pro': { peak: PEAK_PRO },
+  'gpt-6-astra': ASTRA_PRICE_ENTRY,
   default: { peak: PEAK_FLASH },
 }
 
@@ -39,31 +41,51 @@ function finite(value, fallback) {
   return Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-function normalizeTier(raw, base) {
+function normalizeTier(raw, base, preserveCacheWrite = false) {
   const tier = raw && typeof raw === 'object' ? raw : {}
   const input = finite(tier.input, finite(base?.input, 0))
   return {
     cacheRead: finite(tier.cacheRead, finite(base?.cacheRead, 0)),
     input,
     output: finite(tier.output, finite(base?.output, 0)),
-    cacheWrite: finite(tier.cacheWrite, input),
+    // Legacy DeepSeek overrides retain their old input-rate fallback. Flat
+    // model overrides preserve a separately priced cache-write bucket.
+    cacheWrite: finite(tier.cacheWrite, preserveCacheWrite ? finite(base?.cacheWrite, input) : input),
   }
+}
+
+function normalizeRates(raw, baseEntry) {
+  const flat = typeof raw.flat === 'boolean' ? raw.flat : baseEntry?.flat === true
+  const factor = flat ? 1 : 0.5
+  const basePeak = baseEntry?.peak ?? normalizeTier({}, PEAK_FLASH)
+  const scaled = (tier) => Object.fromEntries(Object.entries(tier).map(([key, value]) => [key, value * factor]))
+  const baseIdle = baseEntry?.idle ?? scaled(basePeak)
+  const peakSource = raw.peak && typeof raw.peak === 'object' ? raw.peak : raw
+  const peak = normalizeTier(peakSource, basePeak, flat)
+  const idle = raw.idle && typeof raw.idle === 'object'
+    ? normalizeTier(raw.idle, baseIdle, flat)
+    : scaled(peak)
+  return { peak, idle, flat }
 }
 
 function normalizeEntry(raw, baseEntry) {
   if (raw === null) return null
-  if (!raw || typeof raw !== 'object') return undefined
-  const basePeak = baseEntry?.peak ?? normalizeTier({}, PEAK_FLASH)
-  const baseIdle = baseEntry?.idle
-    ?? { cacheRead: basePeak.cacheRead / 2, input: basePeak.input / 2, output: basePeak.output / 2, cacheWrite: basePeak.cacheWrite / 2 }
-  // Flat object form means "peak"; `peak`/`idle` form is explicit. Missing
-  // fields inherit the built-in entry for this model, not another model's price.
-  const peakSource = raw.peak && typeof raw.peak === 'object' ? raw.peak : raw
-  const peak = normalizeTier(peakSource, basePeak)
-  const idle = raw.idle && typeof raw.idle === 'object'
-    ? normalizeTier(raw.idle, baseIdle)
-    : { cacheRead: peak.cacheRead / 2, input: peak.input / 2, output: peak.output / 2, cacheWrite: peak.cacheWrite / 2 }
-  return { peak, idle }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const rates = normalizeRates(raw, baseEntry)
+  // Missing or non-array tiers inherit; an explicit [] disables them.
+  // Invalid items in an explicit array are ignored.
+  const source = Array.isArray(raw.contextTiers) ? raw.contextTiers : (baseEntry?.contextTiers ?? [])
+  const thresholds = new Map()
+  for (const tier of source) {
+    if (!tier || typeof tier !== 'object' || !Number.isSafeInteger(tier.threshold) || tier.threshold < 0) continue
+    if (thresholds.has(tier.threshold)) continue
+    const inherited = baseEntry?.contextTiers?.find((item) => item.threshold === tier.threshold)
+    thresholds.set(tier.threshold, {
+      threshold: tier.threshold,
+      ...normalizeRates(tier, inherited ?? rates),
+    })
+  }
+  return { ...rates, contextTiers: [...thresholds.values()].sort((a, b) => a.threshold - b.threshold) }
 }
 
 function mergePriceTable(overrides) {
@@ -72,9 +94,9 @@ function mergePriceTable(overrides) {
   for (const key of keys) {
     const override = overrides && Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined
     const raw = override === undefined ? DEFAULT_PRICE_TABLE[key] : override
-    const base = DEFAULT_PRICE_TABLE[key] === undefined
-      ? undefined
-      : normalizeEntry(DEFAULT_PRICE_TABLE[key])
+    const builtin = DEFAULT_PRICE_TABLE[key]
+      ?? (key.endsWith('/gpt-6-astra') && key.split('/').every(Boolean) ? ASTRA_PRICE_ENTRY : undefined)
+    const base = builtin === undefined ? undefined : normalizeEntry(builtin)
     if (override === null) {
       resolved.set(key, null)
       continue
@@ -135,6 +157,13 @@ export function createPricing(config = {}) {
     const bare = typeof model === 'string' ? model : ''
     const namespaced = provider && bare ? `${provider}/${bare}` : ''
     const keys = [namespaced, bare].filter(Boolean)
+    // Match only Astra's exact identity (case-insensitive/provider-prefixed),
+    // never variants such as astra-fast. Explicit config keys win first.
+    const parts = bare.split('/')
+    if (parts.every(Boolean) && parts.at(-1).toLowerCase() === 'gpt-6-astra') {
+      if (provider) keys.push(`${provider}/gpt-6-astra`)
+      keys.push('gpt-6-astra')
+    }
     for (const key of keys) {
       if (table.has(key)) {
         const entry = table.get(key)
@@ -149,11 +178,17 @@ export function createPricing(config = {}) {
     if (!usage) return 0
     const { entry } = resolve(model, provider)
     if (!entry) return 0
-    const tier = isPeak(timeMs) ? entry.peak : entry.idle
     const inputMiss = finite(usage.inputTokens, 0)
     const cacheRead = finite(usage.cacheReadTokens, 0)
     const cacheWrite = finite(usage.cacheWriteTokens, 0)
     const output = finite(usage.outputTokens, 0)
+    const contextTokens = inputMiss + cacheRead + cacheWrite
+    let effective = entry
+    for (const candidate of entry.contextTiers) {
+      if (candidate.threshold > contextTokens) break
+      effective = candidate
+    }
+    const tier = isPeak(timeMs) ? effective.peak : effective.idle
     return (
       cacheRead * tier.cacheRead +
       inputMiss * tier.input +
@@ -172,11 +207,17 @@ export function createPricing(config = {}) {
     summary() {
       const models = {}
       for (const [key, entry] of table) {
-        if (entry) models[key] = { peak: entry.peak, idle: entry.idle }
+        if (entry) models[key] = {
+          peak: entry.peak,
+          idle: entry.idle,
+          ...(entry.flat ? { flat: true } : {}),
+          ...(entry.contextTiers.length ? { contextTiers: entry.contextTiers } : {}),
+        }
       }
       return {
         currency: 'CNY',
         unit: 'per 1M tokens',
+        modelSources: { 'gpt-6-astra': ASTRA_PRICE_SOURCE },
         models,
         peakWindows: windows,
         timeZone,
