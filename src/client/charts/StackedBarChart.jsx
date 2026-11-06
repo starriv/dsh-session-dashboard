@@ -16,7 +16,8 @@ import { useMeasure } from '../hooks.js'
 import { ChartTooltip, TooltipRow } from './ChartTooltip.jsx'
 
 const HEIGHT = 232
-const MARGIN = { top: 16, right: 10, bottom: 30, left: 10 }
+const MARGIN = { top: 16, right: 46, bottom: 30, left: 10 }
+const Y_AXIS_GAP = 8
 
 function roundedTopRect(x, y, width, height, radius) {
   if (height <= 0 || width <= 0) return ''
@@ -125,9 +126,9 @@ export function StackedBarChart({ data, previous, t, locale }) {
           }),
           tick > 0
             ? React.createElement('text', {
-                x: innerWidth,
+                x: innerWidth + Y_AXIS_GAP,
                 y: y(tick) - 5,
-                textAnchor: 'end',
+                textAnchor: 'start',
                 className: 'ss-axis-label',
               }, compactNumber(tick, locale))
             : null,

@@ -43,6 +43,7 @@ test('dashboard sections server-render with realistic data', async () => {
   assert.ok(html.includes('99.3%'), 'dominant donut share')
   assert.ok(html.includes('日均 44.9M'), 'daily average instead of duplicate total')
   assert.ok(html.includes('ss-row-share'), 'ranking share bars')
+  assert.match(html, /text-anchor="start"[^>]*class="ss-axis-label"/, 'Y-axis labels sit outside the plot')
   assert.ok(html.includes('ss-ranking-head'), 'ranking table')
   assert.ok(!html.includes('NaN'), 'no NaN coordinates')
 
