@@ -1250,3 +1250,29 @@
     min-height: 455px;
   }
 }
+
+/* The composition card is narrow whenever the DSH sidebar is open. Its
+   donut + legend need a content-based breakpoint, not just a viewport one. */
+.ss-composition {
+  container-name: stats-composition;
+  container-type: inline-size;
+}
+
+@container stats-composition (max-width: 420px) {
+  .ss-composition-body {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ss-donut,
+  .ss-donut-skeleton {
+    width: min(172px, 78%);
+    margin: 0 auto;
+  }
+
+  .ss-composition-legend {
+    width: 100%;
+    margin-top: 12px;
+  }
+}

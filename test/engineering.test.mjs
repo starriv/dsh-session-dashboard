@@ -21,6 +21,7 @@ test('theme tokens are real and the skeleton/accessibility primitives survive CS
   assert.ok(css.includes('.ss-sr-only'))
   assert.ok(css.includes('--ss-data-accent'))
   assert.ok(css.includes('data-platform="darwin"'))
+  assert.ok(css.includes('@container stats-composition'))
 })
 
 test('the client build wrapper keeps the module-loader contract', async () => {

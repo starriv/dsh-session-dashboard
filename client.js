@@ -1764,6 +1764,32 @@ ${i("kpi.cost.title")}`},{key:"avg",icon:F.createElement(jn),label:i("kpi.avg"),
   }
 }
 
+/* The composition card is narrow whenever the DSH sidebar is open. Its
+   donut + legend need a content-based breakpoint, not just a viewport one. */
+.ss-composition {
+  container-name: stats-composition;
+  container-type: inline-size;
+}
+
+@container stats-composition (max-width: 420px) {
+  .ss-composition-body {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ss-donut,
+  .ss-donut-skeleton {
+    width: min(172px, 78%);
+    margin: 0 auto;
+  }
+
+  .ss-composition-legend {
+    width: 100%;
+    margin-top: 12px;
+  }
+}
+
 /* Chart internals. Surfaces use host tokens; data marks use the fixed palette. */
 
 .ss-grid-line {
