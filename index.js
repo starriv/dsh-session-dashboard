@@ -16,7 +16,7 @@ import { registerStatsRoutes } from './host/http.js'
 import { RuntimeMonitor } from './host/runtime.js'
 import { StatsStore } from './host/store.js'
 
-export const name = '@local/dsh-session-stats'
+export const name = 'dsh-session-dashboard'
 export const inject = ['timer', 'webServer']
 
 function readVersion() {

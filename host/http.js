@@ -73,7 +73,7 @@ export function registerStatsRoutes(ctx, { store, monitor, version }) {
         if (pathname === `${ROUTE_PREFIX}/ping`) {
           json(res, 200, {
             ok: true,
-            name: '@local/dsh-session-stats',
+            name: 'dsh-session-dashboard',
             version,
             sequence: store.sequence,
             scannedAt: store.scannedAt || null,
@@ -87,7 +87,7 @@ export function registerStatsRoutes(ctx, { store, monitor, version }) {
           json(res, 200, {
             ...snapshot,
             runtime: monitor.snapshot(),
-            plugin: { name: '@local/dsh-session-stats', version },
+            plugin: { name: 'dsh-session-dashboard', version },
           }, head)
           return
         }

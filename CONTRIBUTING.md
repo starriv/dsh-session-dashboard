@@ -16,9 +16,11 @@ CI verifies that the committed artifact is reproducible.
 
 The plugin is installed from a local checkout with:
 
-```bash
+```text
 plugin_manager install_bundle -> /absolute/path/to/dsh-session-dashboard
 ```
+
+Path/link installs are development-only and do not receive DSH registry update badges.
 
 ## Pull requests
 

@@ -85,7 +85,7 @@ test('host apply registers routes and serves a complete snapshot', { skip: !HAS_
   assert.ok(snapshot.json.ranking.length <= 2)
   assert.ok(snapshot.json.rankingTotal >= snapshot.json.ranking.length)
   assert.ok(snapshot.json.totals.totalTokens > 0)
-  assert.equal(snapshot.json.plugin.name, '@local/dsh-session-stats')
+  assert.equal(snapshot.json.plugin.name, 'dsh-session-dashboard')
 
   const scoped = await call(routes[0], '/dsh-session-stats/snapshot?scope=7')
   assert.equal(scoped.status, 200)

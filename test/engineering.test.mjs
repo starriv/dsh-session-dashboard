@@ -27,7 +27,7 @@ test('theme tokens are real and the skeleton/accessibility primitives survive CS
 test('the client build wrapper keeps the module-loader contract', async () => {
   const client = await readFile(path.join(root, 'client.js'), 'utf8')
   assert.ok(client.includes('window.__ModuleLoader__.load'))
-  assert.ok(client.includes('id: "@local/dsh-session-stats"'))
+  assert.ok(client.includes('id: "dsh-session-dashboard"'))
   assert.ok(!client.includes('__STATS_CSS__'))
   assert.ok(!/require\(["'](?!react)/.test(client), 'only react may be external')
 })

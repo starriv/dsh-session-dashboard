@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- Publish the bundle as `dsh-session-dashboard` on the npm registry so DSH can
+  track versions and offer the **Update** action in the Plugins page.
+- Add the npm distribution metadata and publish workflow inputs needed for
+  registry installs; local path/link installs remain development-only and do
+  not receive update badges.
+- Keep the existing bundle row id and dashboard configuration compatible with
+  previous local installations.
+
 ## 1.1.0
 
 - Add a built-in GPT-6 Astra price snapshot from the community model-price-table

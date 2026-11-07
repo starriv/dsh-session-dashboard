@@ -1,9 +1,9 @@
-# Bundle layer for @local/dsh-session-stats.
+# Bundle layer for dsh-session-dashboard.
 # The Host row computes the snapshot and serves it from the Web server; the
 # Client row (declared through package.json `dsh.client`) renders the dashboard.
 - insert:
     - id: dsh-session-stats
-      name: '@local/dsh-session-stats'
+      name: 'dsh-session-dashboard'
       config:
         scope: all
         trendDays: 30

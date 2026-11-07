@@ -64,7 +64,7 @@ test('StatsPage loads a snapshot and renders the full dashboard in the DOM', asy
         generatedAt: Date.now(),
         scope: scoped ? Number(scope) : 'all',
         trendDays: days,
-        plugin: { name: '@local/dsh-session-stats', version: '1.0.0' },
+        plugin: { name: 'dsh-session-dashboard', version: '1.2.0' },
         daily: harness.fixture.daily.slice(-Math.min(days, harness.fixture.daily.length)),
         totals: {
           ...harness.fixture.totals,

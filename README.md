@@ -49,7 +49,16 @@ DSH 会话日志，提供 Token 用量、费用估算、每日趋势、Token 构
 
 ## 安装
 
-### 从本地仓库安装
+### 从 npm 安装
+
+```text
+plugin_manager install_bundle -> dsh-session-dashboard
+```
+
+DSH 会从已配置的 npm registry 解析最新版本。以 registry 包安装后，插件管理页会在
+有新版本时显示「可更新」，并可直接更新到最新版本。
+
+### 从源码或本地 checkout 安装（开发）
 
 ```bash
 git clone https://github.com/starriv/dsh-session-dashboard.git
@@ -58,11 +67,12 @@ npm ci
 npm run build
 ```
 
-在 DSH 插件管理器中执行 `install_bundle`，目标选择该仓库的绝对路径。安装完成后，
+然后在插件管理器中执行 `install_bundle`，目标选择该仓库的绝对路径。安装完成后，
 左侧栏会出现「会话统计」入口；首次打开或插件更新后刷新一次 Web GUI。
 
 Host 侧代码（`index.js`、`host/`）修改后需要重启 DSH 宿主。Client 侧由插件管理器
-加载 `client.js`。开发时也可以使用 `link:` 指向本地目录。
+加载 `client.js`。本地 `link:` 或路径安装属于开发方式，DSH 不会为其提供 registry
+更新徽标；需要自动更新能力时请使用 npm 安装。
 
 `npm test` 会先通过 `pretest` 重新生成 `client.js`。提交源码变更时请一并提交构建
 产物；CI 会校验构建结果是否与仓库中的文件一致。

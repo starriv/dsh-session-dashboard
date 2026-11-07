@@ -37,8 +37,8 @@ export function apply(ctx) {
   ctx.effect(() => {
     if (typeof document === 'undefined') return undefined
     const tag = document.createElement('style')
-    tag.dataset.plugin = '@local/dsh-session-stats'
-    tag.dataset.pluginCss = '@local/dsh-session-stats/dashboard.css'
+    tag.dataset.plugin = 'dsh-session-dashboard'
+    tag.dataset.pluginCss = 'dsh-session-dashboard/dashboard.css'
     tag.textContent = CSS
     document.head.appendChild(tag)
     return () => tag.remove()
