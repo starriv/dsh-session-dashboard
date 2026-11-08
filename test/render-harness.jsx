@@ -46,7 +46,15 @@ export function renderSections() {
         locale: 'zh',
       }),
       React.createElement(CompositionCard, { totals: fixture.totals, t, locale: 'zh' }),
-      React.createElement(SessionRanking, { ranking: fixture.ranking, t, locale: 'zh' }),
+      React.createElement(SessionRanking, {
+        ranking: fixture.ranking,
+        rankingDuration: fixture.ranking,
+        totalTokens: fixture.totals.totalTokens,
+        timeZone: 'Asia/Shanghai',
+        idleGapMs: fixture.idleGapMs,
+        t,
+        locale: 'zh',
+      }),
     ),
   )
 }

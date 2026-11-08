@@ -116,6 +116,30 @@ export function formatDayFull(dateKey, locale = 'en') {
   }).format(date)
 }
 
+/** Compact date+clock for tooltips; returns '' for a missing/unusable instant. */
+export function formatDateTime(ms, locale = 'en', timeZone) {
+  if (!Number.isFinite(ms) || ms <= 0) return ''
+  const options = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }
+  if (timeZone) options.timeZone = timeZone
+  try {
+    return new Intl.DateTimeFormat(locale || 'en', options).format(new Date(ms))
+  } catch {
+    delete options.timeZone
+    try {
+      return new Intl.DateTimeFormat(locale || 'en', options).format(new Date(ms))
+    } catch {
+      return ''
+    }
+  }
+}
+
 export function formatClock(ms, locale = 'en', timeZone) {
   if (!Number.isFinite(ms)) return '--:--:--'
   const options = {

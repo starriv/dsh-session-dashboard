@@ -10,6 +10,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { activityBounds, clipActivityIntervals } from './activity.js'
 import { createPricing } from './pricing.js'
 import { normalizeScope } from './scope.js'
 import { parseSessionLog } from './session-log.js'
@@ -213,6 +214,7 @@ export class StatsStore {
         const session = parseSessionLog(text, {
           costOf: this.pricing.costOf,
           timeZone: this.pricing.timeZone,
+          idleGapMs: this.config.idleGapMs,
         })
         if (!session) throw new Error('session log has no header')
         if (!session.id) session.id = path.basename(path.dirname(file))
@@ -302,6 +304,9 @@ export class StatsStore {
     const scopeKeys = scoped ? recentDayKeys(todayKey, scope) : null
     const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null
     const scopeStartMs = scoped ? dayStartMs(scopeKeys[0], this.pricing.timeZone) : 0
+    // Scoped duration is also clipped at the end of today so a corrupt future
+    // clock cannot make a 7-day view report more than seven days.
+    const scopeEndMs = scoped ? dayStartMs(shiftDayKey(todayKey, 1), this.pricing.timeZone) : 0
     const previousTrendKeys = recentDayKeys(shiftDayKey(trendKeys[0], -1), trendDays)
     const previousTrendSet = new Set(previousTrendKeys)
     const daily = new Map(trendKeys.map((date) => [date, {
@@ -405,6 +410,27 @@ export class StatsStore {
       }
 
       if (scoped && usage.totalTokens === 0) continue
+      // Scoped rows describe activity inside the selected window only, so the
+      // tooltip's span and first/last instants stay consistent with the
+      // clipped active time.
+      const durationIntervals = scoped
+        ? clipActivityIntervals(session.activityIntervals, scopeStartMs, scopeEndMs)
+        : session.activityIntervals
+      const durationBounds = activityBounds(durationIntervals)
+      const durationMs = scoped
+        ? durationIntervals.reduce((sum, [from, to]) => sum + (to - from), 0)
+        : (session.activeMs || 0)
+      // Total time is the wall-clock span the session covers: creation to the
+      // last actual activity. It deliberately stops at `lastActivityAt` rather
+      // than `updatedAt`, because a trailing `session/end-seed` marker can be
+      // written days later and would otherwise resurrect the old 100h+ artifact
+      // (e.g. a 1.7h session reporting 266h). A scoped view intersects it with
+      // the selected window.
+      const activityEnd = session.lastActivityAt || 0
+      const totalStart = scoped ? Math.max(session.createdAt, scopeStartMs) : session.createdAt
+      const totalEnd = scoped ? Math.min(activityEnd, scopeEndMs) : activityEnd
+      const totalValid = totalEnd > totalStart
+      const totalMs = totalValid ? totalEnd - totalStart : 0
       ranking.push({
         id: session.id,
         title: session.title,
@@ -415,7 +441,16 @@ export class StatsStore {
         agentPreset: session.agentPreset,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        durationMs: Math.max(0, session.updatedAt - Math.max(session.createdAt, scopeStartMs)),
+        // `durationMs` is active time; `totalMs` keeps the wall-clock span so
+        // the UI can show both metrics side by side. The first-to-last
+        // activity span stays available for the explanatory tooltip.
+        durationMs,
+        totalMs,
+        totalStartAt: totalValid ? totalStart : 0,
+        totalEndAt: totalValid ? totalEnd : 0,
+        spanMs: scoped ? durationBounds.spanMs : (session.spanMs || 0),
+        firstActivityAt: scoped ? durationBounds.firstActivityAt : (session.firstActivityAt || 0),
+        lastActivityAt: scoped ? durationBounds.lastActivityAt : (session.lastActivityAt || 0),
         tokens: usage.totalTokens,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
@@ -432,8 +467,11 @@ export class StatsStore {
     const rankingPage = ranking.slice(0, rankingLimit)
     // The UI also ranks by duration; slicing only the token order would make
     // that view incomplete for users with many sessions, so cap both orders.
+    // Same ordering as the client's duration view: active time first, then the
+    // wall-clock total, then spend. Keeping both sites identical makes the
+    // sliced page and its rendered order agree.
     const rankingDuration = [...ranking]
-      .sort((a, b) => b.durationMs - a.durationMs)
+      .sort((a, b) => (b.durationMs - a.durationMs) || (b.totalMs - a.totalMs) || (b.tokens - a.tokens))
       .slice(0, rankingLimit)
     const denominator = composition.cacheReadTokens + composition.inputTokens
     const cacheHitRate = denominator > 0 ? composition.cacheReadTokens / denominator : 0
@@ -456,6 +494,7 @@ export class StatsStore {
       errors: this.errors,
       skipped: this.skipped,
       timeZone: this.pricing.timeZone,
+      idleGapMs: this.config.idleGapMs,
       scope,
       trendDays,
       scopeRange: scopeKeys ? { from: scopeKeys[0], to: scopeKeys[scopeKeys.length - 1] } : null,

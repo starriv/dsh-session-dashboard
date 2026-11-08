@@ -45,6 +45,13 @@ test('dashboard sections server-render with realistic data', async () => {
   assert.ok(html.includes('ss-row-share'), 'ranking share bars')
   assert.match(html, /text-anchor="start"[^>]*class="ss-axis-label"/, 'Y-axis labels sit outside the plot')
   assert.ok(html.includes('ss-ranking-head'), 'ranking table')
+  assert.ok(html.includes('活跃时长'), 'active-time column is labelled')
+  assert.ok(html.includes('总时长'), 'total-time column is labelled')
+  assert.ok(html.includes('合并会话事件间隔'), 'active header explains idle-gap exclusion')
+  assert.ok(html.includes('包含空闲间隔'), 'total header explains the wall-clock span')
+  assert.ok(html.includes('活动跨度'), 'active tooltip still reports the merged activity span')
+  assert.ok(html.includes('1h 30m'), 'active duration stays readable')
+  assert.ok(html.includes('264h 00m'), 'total duration renders in its own column')
   assert.ok(!html.includes('NaN'), 'no NaN coordinates')
 
   const dashboard = harness.renderDashboard()

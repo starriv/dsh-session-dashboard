@@ -20,9 +20,12 @@ const previousTotals = previousDaily.reduce((sum, day) => ({
 }), { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costCny: 0 })
 const previousSessions = 26
 
+const DAY = 86_400_000
+
 export const fixture = {
   scope: 'all',
   trendDays: 7,
+  idleGapMs: 10 * 60 * 1000,
   since: Date.UTC(2026, 9, 1),
   totals: {
     inputTokens: 4_038_917,
@@ -76,8 +79,14 @@ export const fixture = {
       workspace: 'analytics',
       model: 'deepseek-flash',
       createdAt: 1_793_436_957_403,
-      updatedAt: 1_793_436_957_403 + 5_400_000,
+      updatedAt: 1_793_436_957_403 + 11 * DAY,
       durationMs: 5_400_000,
+      totalMs: 11 * DAY,
+      totalStartAt: 1_793_436_957_403,
+      totalEndAt: 1_793_436_957_403 + 11 * DAY,
+      spanMs: 11 * DAY,
+      firstActivityAt: 1_793_436_957_403,
+      lastActivityAt: 1_793_436_957_403 + 11 * DAY,
       tokens: 228_209_551,
       cacheReadTokens: 227_000_000,
       costCny: 11.2,
@@ -90,8 +99,14 @@ export const fixture = {
       workspace: 'reporting',
       model: 'deepseek-v4-pro',
       createdAt: 1_793_211_800_124,
-      updatedAt: 1_793_211_800_124 + 900_000,
+      updatedAt: 1_793_211_800_124 + 4 * DAY,
       durationMs: 900_000,
+      totalMs: 4 * DAY,
+      totalStartAt: 1_793_211_800_124,
+      totalEndAt: 1_793_211_800_124 + 4 * DAY,
+      spanMs: 4 * DAY,
+      firstActivityAt: 1_793_211_800_124,
+      lastActivityAt: 1_793_211_800_124 + 4 * DAY,
       tokens: 166_163_269,
       cacheReadTokens: 165_000_000,
       costCny: 8.4,
@@ -106,6 +121,12 @@ export const fixture = {
       createdAt: 1_793_595_995_698,
       updatedAt: 1_793_595_995_698 + 1_800_000,
       durationMs: 1_800_000,
+      totalMs: 1_800_000,
+      totalStartAt: 1_793_595_995_698,
+      totalEndAt: 1_793_595_995_698 + 1_800_000,
+      spanMs: 1_800_000,
+      firstActivityAt: 1_793_595_995_698,
+      lastActivityAt: 1_793_595_995_698 + 1_800_000,
       tokens: 0,
       cacheReadTokens: 0,
       costCny: 0,

@@ -10,6 +10,7 @@
  * latest `request/header` config as a fallback.
  */
 
+import { DEFAULT_IDLE_GAP_MS, activityBounds, clipDurationMs, mergeActivityIntervals } from './activity.js'
 import { dayKeyOf } from './time.js'
 
 function emptyUsage() {
@@ -139,6 +140,7 @@ function inheritedCutOf(lines) {
  * @param {object} options
  * @param {(usage: object, model: string, provider: string, timeMs: number) => number} options.costOf
  * @param {string} options.timeZone IANA zone used for day buckets
+ * @param {number} [options.idleGapMs] gap still counted as continuous activity
  */
 const MAX_EVENT_TIME = 8.64e15
 
@@ -146,13 +148,14 @@ function safeEventTime(value) {
   return Number.isFinite(value) && Math.abs(value) <= MAX_EVENT_TIME ? value : 0
 }
 
-export function parseSessionLog(text, { costOf, timeZone }) {
+export function parseSessionLog(text, { costOf, timeZone, idleGapMs = DEFAULT_IDLE_GAP_MS }) {
   const lines = text.split('\n')
   let header = null
   let inheritedCut = inheritedCutOf(lines)
   let title = ''
   let firstTime = 0
   let lastTime = 0
+  const eventTimes = []
   let requestModel = ''
   let requestProvider = ''
   let lastModel = ''
@@ -191,6 +194,9 @@ export function parseSessionLog(text, { costOf, timeZone }) {
 
     const eventTime = safeEventTime(event.time)
     if (eventTime > 0) {
+      // Seed boundary markers are bookkeeping, not activity; a plain tail
+      // marker written at the end of a normal session must not extend a span.
+      if (event.type !== 'session/end-seed') eventTimes.push(eventTime)
       if (firstTime === 0 || eventTime < firstTime) firstTime = eventTime
       if (eventTime > lastTime) lastTime = eventTime
     }
@@ -312,6 +318,12 @@ export function parseSessionLog(text, { costOf, timeZone }) {
   const primary = modelEntries[0]
   let costCny = 0
   for (const value of Object.values(days)) costCny += value.costCny
+  // Duration is derived from this session's own events only: the wall-clock
+  // span from first to last event is kept for context, while `activeMs`
+  // excludes idle gaps and is what the dashboard ranks and displays.
+  const activityIntervals = mergeActivityIntervals(eventTimes, idleGapMs)
+  const activeMs = clipDurationMs(activityIntervals)
+  const { firstActivityAt, lastActivityAt, spanMs } = activityBounds(activityIntervals)
 
   return {
     id,
@@ -319,6 +331,11 @@ export function parseSessionLog(text, { costOf, timeZone }) {
     cwd: typeof header.cwd === 'string' ? header.cwd : '',
     createdAt,
     updatedAt: lastTime || createdAt,
+    activeMs,
+    spanMs,
+    firstActivityAt,
+    lastActivityAt,
+    activityIntervals,
     isSeeded: Boolean(header.isSeeded),
     parentSession: typeof header.parentSession === 'string' ? header.parentSession : '',
     agentPreset: typeof header.agentPreset === 'string' ? header.agentPreset : '',

@@ -8,3 +8,4 @@
         scope: all
         trendDays: 30
         timeZone: Asia/Shanghai
+        idleGapMinutes: 10

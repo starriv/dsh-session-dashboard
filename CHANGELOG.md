@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0
+
+- Session ranking now shows **two duration columns** instead of one:
+  - 「活跃时长」/“Active time” is the new metric. It merges the session's own
+    events into activity intervals and excludes idle gaps longer than
+    `idleGapMinutes` (default 10 minutes, range 1–120). A conversation left open
+    for a week no longer reports 100+ hours of active work.
+  - 「总时长」/“Total time” keeps the previous wall-clock span, but ends at the
+    session's last real activity instead of the last log line. A trailing
+    `session/end-seed` marker written hours or days later no longer turns a
+    1.7h session into 266h, so the old number stays available without the false
+    tail.
+- The ranking's duration sort uses active time, then total time, then spend as
+  tie breakers (identical on Host and Client); the segmented control is renamed
+  to 「按活跃时长」/“By active time”.
+- Scoped snapshots (7/14/30 days) clip both metrics to the selected window, so a
+  7-day view cannot report a longer duration than the window itself. Isolated
+  single-event stretches keep their instant in the scoped first/last bounds
+  even though they contribute zero active duration.
+- Tooltips on both columns explain the formula and show the first/last activity
+  instants plus the merged activity span (active) or the session span (total).
+- Seed-inherited prefixes and `session/end-seed` markers never contribute
+  activity; out-of-order and corrupt event clocks are ignored safely.
+- Add store, parser helper, SSR and formatting tests for both metrics.
+
 ## 1.2.0
 
 - Publish the bundle as `dsh-session-dashboard` on the npm registry so DSH can

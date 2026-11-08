@@ -5,6 +5,7 @@ import {
   exactNumber,
   formatClock,
   formatCost,
+  formatDateTime,
   formatDayFull,
   formatDayLabel,
   formatDuration,
@@ -37,4 +38,7 @@ test('dates and clocks use the requested time zone with a safe fallback', () => 
   assert.doesNotThrow(() => formatClock(instant, 'en', 'Not/AZone'))
   assert.equal(formatDayLabel('2026-11-05', 'zh'), '11-05')
   assert.match(formatDayFull('2026-11-05', 'en'), /Nov/)
+  assert.match(formatDateTime(instant, 'en', 'Asia/Shanghai'), /11\/05\/2026/)
+  assert.equal(formatDateTime(0, 'en', 'Asia/Shanghai'), '')
+  assert.doesNotThrow(() => formatDateTime(instant, 'en', 'Not/AZone'))
 })

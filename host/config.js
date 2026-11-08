@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG = {
   refreshMs: 1500,
   runtimeSampleMs: 5000,
   historySize: 60,
+  idleGapMinutes: 10,
 }
 
 function integer(value, fallback, min, max) {
@@ -25,6 +26,7 @@ export function resolveConfig(raw) {
   const sessionsRoot = typeof config.sessionsRoot === 'string' && config.sessionsRoot
     ? config.sessionsRoot
     : path.join(dshHome, 'sessions')
+  const idleGapMinutes = integer(config.idleGapMinutes, DEFAULT_CONFIG.idleGapMinutes, 1, 120)
   return {
     scope: normalizeScope(config.scope),
     trendDays: integer(config.trendDays, DEFAULT_CONFIG.trendDays, 1, 90),
@@ -33,6 +35,10 @@ export function resolveConfig(raw) {
     backgroundScanMs: integer(config.backgroundScanMs, 60_000, 10_000, 3_600_000),
     runtimeSampleMs: integer(config.runtimeSampleMs, DEFAULT_CONFIG.runtimeSampleMs, 1000, 60_000),
     historySize: integer(config.historySize, DEFAULT_CONFIG.historySize, 2, 600),
+    // Idle stretches longer than this do not count as session time. Kept in
+    // minutes for config readability, read in milliseconds by the scanner.
+    idleGapMinutes,
+    idleGapMs: idleGapMinutes * 60_000,
     dshHome,
     sessionsRoot,
     pricing: config.pricing && typeof config.pricing === 'object' ? config.pricing : undefined,

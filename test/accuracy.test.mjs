@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { readdir, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DEFAULT_IDLE_GAP_MS, activityBounds, clipActivityIntervals, clipDurationMs, mergeActivityIntervals } from '../host/activity.js'
 import { resolveConfig } from '../host/config.js'
 import { createPricing } from '../host/pricing.js'
 import { parseSessionLog } from '../host/session-log.js'
@@ -66,6 +67,60 @@ test('invalid time zones fall back instead of crashing Intl', () => {
 test('calendar-day boundaries resolve in the configured zone', () => {
   assert.equal(dayStartMs('2026-11-05', 'Asia/Shanghai'), Date.UTC(2026, 10, 4, 16, 0))
   assert.equal(dayStartMs('2026-11-05', 'UTC'), Date.UTC(2026, 10, 5, 0, 0))
+})
+
+test('activity intervals merge short gaps and break long idle stretches', () => {
+  const base = Date.UTC(2026, 10, 4, 2, 0)
+  assert.deepEqual(mergeActivityIntervals([]), [])
+  // Out-of-order events still form one stretch when every gap is short.
+  assert.deepEqual(mergeActivityIntervals([base + 10_000, base, base + 5_000]), [[base, base + 10_000]])
+  // A gap longer than the idle threshold starts a new stretch.
+  assert.deepEqual(
+    mergeActivityIntervals([base, base + 60_000, base + 60_000 + DEFAULT_IDLE_GAP_MS + 1]),
+    [[base, base + 60_000], [base + 60_000 + DEFAULT_IDLE_GAP_MS + 1, base + 60_000 + DEFAULT_IDLE_GAP_MS + 1]],
+  )
+  // The boundary itself still counts as one continuous stretch.
+  assert.deepEqual(mergeActivityIntervals([base, base + DEFAULT_IDLE_GAP_MS]), [[base, base + DEFAULT_IDLE_GAP_MS]])
+  // Corrupt clocks are ignored instead of joining the timeline.
+  assert.deepEqual(mergeActivityIntervals([base, NaN, -1, 0, 1e20, Infinity]), [[base, base]])
+})
+
+test('activity duration clips to a scope window without counting idle gaps', () => {
+  const base = Date.UTC(2026, 10, 4, 2, 0)
+  const intervals = [[base, base + 3_600_000], [base + 86_400_000, base + 86_400_000 + 1_800_000]]
+  assert.equal(clipDurationMs(intervals), 5_400_000)
+  assert.equal(clipDurationMs(intervals, base + 1_800_000), 1_800_000 + 1_800_000)
+  assert.equal(clipDurationMs(intervals, -Infinity, base + 3_600_000), 3_600_000)
+  assert.equal(clipDurationMs([], 0), 0)
+  assert.equal(clipDurationMs(null), 0)
+  assert.equal(clipDurationMs([[base + 10, base]], 0), 0)
+
+  const clipped = clipActivityIntervals(intervals, base + 1_800_000)
+  assert.deepEqual(clipped, [
+    [base + 1_800_000, base + 3_600_000],
+    [base + 86_400_000, base + 86_400_000 + 1_800_000],
+  ])
+
+  // An isolated event is a zero-length interval but not nothing: scoped bounds
+  // must keep the instant, and drop it only when it falls outside the window.
+  assert.deepEqual(clipActivityIntervals([[base, base]], 0), [[base, base]])
+  assert.deepEqual(clipActivityIntervals([[base, base]], base + 1), [])
+  assert.deepEqual(clipActivityIntervals([[base, base]], 0, base), [])
+  assert.deepEqual(activityBounds([[base, base]]), { firstActivityAt: base, lastActivityAt: base, spanMs: 0 })
+  assert.deepEqual(activityBounds([
+    [base, base],
+    [base + 20 * 3_600_000, base + 20 * 3_600_000],
+  ]), {
+    firstActivityAt: base,
+    lastActivityAt: base + 20 * 3_600_000,
+    spanMs: 20 * 3_600_000,
+  })
+  assert.deepEqual(activityBounds(clipped), {
+    firstActivityAt: base + 1_800_000,
+    lastActivityAt: base + 86_400_000 + 1_800_000,
+    spanMs: 86_400_000,
+  })
+  assert.deepEqual(activityBounds([]), { firstActivityAt: 0, lastActivityAt: 0, spanMs: 0 })
 })
 
 test('pricing distinguishes peak and idle windows', () => {
@@ -140,6 +195,67 @@ test('forked sessions exclude the inherited prefix from usage and titles', () =>
   assert.equal(session.usage.cacheReadTokens, ownUsage.cacheReadTokens)
   assert.equal(session.usage.totalTokens, 6)
   assert.equal(session.title, 'Child title')
+  // The inherited prefix and the seed marker are not the child's activity.
+  assert.equal(session.firstActivityAt, time + 3)
+  assert.equal(session.lastActivityAt, time + 4)
+  assert.equal(session.spanMs, 1)
+  assert.equal(session.activeMs, 1)
+})
+
+test('parseSessionLog reports active time separately from the wall-clock span', () => {
+  const base = Date.UTC(2026, 10, 4, 2, 0)
+  const usage = { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const lines = [
+    { type: 'session', version: 4, id: 'session-duration', createdAt: base, cwd: '/tmp/demo' },
+    { type: 'user/message', seq: 1, time: base + 1_000, data: {} },
+    { type: 'assistant/message', seq: 2, time: base + 61_000, data: { turn: 1, step: 1, usage } },
+    // A three-hour idle gap: the resumed visit is a separate active stretch.
+    { type: 'user/message', seq: 3, time: base + 3 * 3_600_000, data: {} },
+    { type: 'assistant/message', seq: 4, time: base + 3 * 3_600_000 + 30_000, data: { turn: 2, step: 1, usage } },
+  ]
+  const text = lines.map((line) => JSON.stringify(line)).join('\n')
+  const parsed = parseSessionLog(text, { costOf: () => 0, timeZone: ZONE })
+  assert.equal(parsed.firstActivityAt, base + 1_000)
+  assert.equal(parsed.lastActivityAt, base + 3 * 3_600_000 + 30_000)
+  assert.equal(parsed.spanMs, 3 * 3_600_000 + 29_000)
+  assert.equal(parsed.activeMs, 90_000)
+  assert.deepEqual(parsed.activityIntervals, [
+    [base + 1_000, base + 61_000],
+    [base + 3 * 3_600_000, base + 3 * 3_600_000 + 30_000],
+  ])
+
+  // The idle threshold is configurable: a five-minute bridge joins visits at
+  // the 10-minute default but splits them at a 60-second threshold.
+  const bridge = [
+    { type: 'session', version: 4, id: 'session-bridge', createdAt: base, cwd: '/tmp/demo' },
+    { type: 'user/message', seq: 1, time: base, data: {} },
+    { type: 'user/message', seq: 2, time: base + 60_000, data: {} },
+    { type: 'user/message', seq: 3, time: base + 5 * 60_000 + 60_000, data: {} },
+  ]
+  const bridgeText = bridge.map((line) => JSON.stringify(line)).join('\n')
+  assert.equal(parseSessionLog(bridgeText, { costOf: () => 0, timeZone: ZONE }).activeMs, 6 * 60_000)
+  assert.equal(parseSessionLog(bridgeText, { costOf: () => 0, timeZone: ZONE, idleGapMs: 60_000 }).activeMs, 60_000)
+})
+
+test('a trailing end-seed marker does not count as activity or extend the span', () => {
+  const base = Date.UTC(2026, 10, 4, 2, 0)
+  const usage = { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+  const lines = [
+    { type: 'session', version: 4, id: 'session-tail-marker', createdAt: base, cwd: '/tmp/demo' },
+    { type: 'user/message', seq: 1, time: base + 3_600_000, data: {} },
+    { type: 'assistant/message', seq: 2, time: base + 3_600_000 + 30_000, data: { turn: 1, step: 1, usage } },
+    // Written 265h later when the session is torn down: bookkeeping only.
+    { type: 'session/end-seed', seq: 3, time: base + 265 * 3_600_000, data: {} },
+  ]
+  const parsed = parseSessionLog(lines.map((line) => JSON.stringify(line)).join('\n'), {
+    costOf: () => 0,
+    timeZone: ZONE,
+  })
+  assert.equal(parsed.lastActivityAt, base + 3_600_000 + 30_000)
+  assert.equal(parsed.spanMs, 30_000)
+  assert.equal(parsed.activeMs, 30_000)
+  // updatedAt keeps the marker so duplicate folding still sees the newest copy.
+  assert.equal(parsed.updatedAt, base + 265 * 3_600_000)
 })
 
 test('usage fold mirrors the official retry/replacement semantics', () => {
@@ -181,6 +297,16 @@ test('real store snapshot reconciles with the official tokenUsage projection', {
   assert.ok(snapshot.files > 0)
   assert.ok(snapshot.totals.totalTokens > 0)
   assert.equal(snapshot.ranking.length, Math.min(snapshot.files, 2000))
+  assert.equal(snapshot.idleGapMs, 10 * 60 * 1000)
+  // Duration is active time, so it can never exceed the activity span, and a
+  // resumed-across-days session no longer reports its wall-clock lifetime.
+  for (const row of snapshot.ranking) {
+    assert.ok(row.durationMs >= 0)
+    assert.ok(row.totalMs >= 0)
+    assert.ok(row.totalStartAt >= 0 && row.totalEndAt >= row.totalStartAt)
+    if (row.totalMs > 0) assert.equal(row.totalEndAt, row.lastActivityAt)
+    assert.ok(row.durationMs <= row.spanMs + 1, `${row.id} active ${row.durationMs} > span ${row.spanMs}`)
+  }
 
   const cacheDir = path.join(DSH_HOME, 'storages', 'session_projcache', 'sessions')
   let exact = 0

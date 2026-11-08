@@ -3,15 +3,51 @@
 import * as React from 'react'
 import { Card, CardHeader, EmptyState, Segmented, Skeleton } from './ui.jsx'
 import { IconTable } from '../icons.jsx'
-import { compactNumber, exactNumber, formatCost, formatDuration, shortModel } from '../format.js'
+import { compactNumber, exactNumber, formatCost, formatDateTime, formatDuration, shortModel } from '../format.js'
+
+const DEFAULT_IDLE_GAP_MS = 10 * 60 * 1000
 
 function rankingRows(ranking, durationRanking, mode) {
   const source = mode === 'duration' && Array.isArray(durationRanking) ? durationRanking : ranking
   const rows = Array.isArray(source) ? [...source] : []
   rows.sort((a, b) => (mode === 'duration'
-    ? (b.durationMs || 0) - (a.durationMs || 0)
+    ? ((b.durationMs || 0) - (a.durationMs || 0))
+      || ((b.totalMs || 0) - (a.totalMs || 0))
+      || ((b.tokens || 0) - (a.tokens || 0))
     : (b.tokens || 0) - (a.tokens || 0)))
   return rows
+}
+
+function idleMinutes(idleGapMs) {
+  const value = Number.isFinite(idleGapMs) && idleGapMs > 0 ? idleGapMs : DEFAULT_IDLE_GAP_MS
+  return Math.max(1, Math.round(value / 60_000))
+}
+
+function activityRange(row, locale, timeZone) {
+  const first = formatDateTime(row.firstActivityAt || row.createdAt, locale, timeZone)
+  const last = formatDateTime(row.lastActivityAt || row.updatedAt, locale, timeZone)
+  return first && last ? `${first} → ${last}` : ''
+}
+
+/**
+ * Explain both numbers instead of leaving "265h" to the reader's imagination:
+ * active time excludes idle gaps, total time keeps the whole wall-clock span.
+ */
+function activeTitle(row, t, locale, timeZone, idleGapMs) {
+  const lines = [t('ranking.activeHint').replace('{minutes}', String(idleMinutes(idleGapMs)))]
+  const range = activityRange(row, locale, timeZone)
+  const span = formatDuration(row.spanMs || 0)
+  if (range) lines.push(`${t('ranking.activityRange')} ${range} · ${t('ranking.activitySpan')} ${span}`)
+  else lines.push(`${t('ranking.activitySpan')} ${span}`)
+  return lines.join('\n')
+}
+
+function totalTitle(row, t, locale, timeZone) {
+  const lines = [t('ranking.totalHint')]
+  const first = formatDateTime(row.totalStartAt || row.createdAt, locale, timeZone)
+  const last = formatDateTime(row.totalEndAt || row.updatedAt, locale, timeZone)
+  if (first && last) lines.push(`${t('ranking.sessionRange')} ${first} → ${last}`)
+  return lines.join('\n')
 }
 
 function shareLabel(share) {
@@ -24,7 +60,7 @@ function RankIndex({ index }) {
   return React.createElement('span', { className: 'ss-rank' }, String(index + 1).padStart(2, '0'))
 }
 
-function HeaderRow({ t }) {
+function HeaderRow({ t, idleGapMs }) {
   return React.createElement(
     'div',
     { className: 'ss-ranking-head', role: 'row' },
@@ -32,7 +68,24 @@ function HeaderRow({ t }) {
     React.createElement('span', { className: 'ss-col-session', role: 'columnheader' }, t('ranking.session')),
     React.createElement('span', { className: 'ss-col-token', role: 'columnheader' }, t('ranking.tokens')),
     React.createElement('span', { className: 'ss-col-cost', role: 'columnheader' }, t('ranking.cost')),
-    React.createElement('span', { className: 'ss-col-duration', role: 'columnheader' }, t('ranking.duration')),
+    React.createElement(
+      'span',
+      {
+        className: 'ss-col-duration',
+        role: 'columnheader',
+        title: t('ranking.activeHint').replace('{minutes}', String(idleMinutes(idleGapMs))),
+      },
+      t('ranking.activeDuration'),
+    ),
+    React.createElement(
+      'span',
+      {
+        className: 'ss-col-total',
+        role: 'columnheader',
+        title: t('ranking.totalHint'),
+      },
+      t('ranking.totalDuration'),
+    ),
   )
 }
 
@@ -53,6 +106,7 @@ function SkeletonBody({ t, count = 8 }) {
       React.createElement('span', { className: 'ss-col-token', role: 'cell' }, React.createElement(Skeleton, { className: 'ss-token-skeleton' })),
       React.createElement('span', { className: 'ss-col-cost', role: 'cell' }, React.createElement(Skeleton, { className: 'ss-cost-skeleton' })),
       React.createElement('span', { className: 'ss-col-duration', role: 'cell' }, React.createElement(Skeleton, { className: 'ss-duration-skeleton' })),
+      React.createElement('span', { className: 'ss-col-total', role: 'cell' }, React.createElement(Skeleton, { className: 'ss-duration-skeleton' })),
     )),
   )
 }
@@ -67,6 +121,8 @@ export function SessionRanking({
   onModeChange,
   t,
   locale,
+  timeZone,
+  idleGapMs,
 }) {
   const rows = rankingRows(ranking, rankingDuration, mode)
   const changeMode = onModeChange || (() => {})
@@ -103,7 +159,7 @@ export function SessionRanking({
       ? React.createElement(
           'div',
           { className: 'ss-ranking-scroll', role: 'table', 'aria-label': t('ranking.title') },
-          React.createElement(HeaderRow, { t }),
+          React.createElement(HeaderRow, { t, idleGapMs }),
           React.createElement(SkeletonBody, { t, count: rows.length || 8 }),
         )
       : rows.length === 0
@@ -111,7 +167,7 @@ export function SessionRanking({
         : React.createElement(
             'div',
             { className: 'ss-ranking-scroll', role: 'table', 'aria-label': t('ranking.title') },
-            React.createElement(HeaderRow, { t }),
+            React.createElement(HeaderRow, { t, idleGapMs }),
             React.createElement(
               'div',
               { className: 'ss-ranking-body', role: 'rowgroup' },
@@ -153,7 +209,24 @@ export function SessionRanking({
                     React.createElement('span', { className: 'ss-sr-only' }, `${exactNumber(row.tokens, locale)} ${t('token.tokens')}, ${shareLabel(share)}`),
                   ),
                   React.createElement('span', { className: 'ss-col-cost', role: 'cell' }, formatCost(row.costCny, locale)),
-                  React.createElement('span', { className: 'ss-col-duration', role: 'cell' }, formatDuration(row.durationMs)),
+                  React.createElement(
+                    'span',
+                    {
+                      className: 'ss-col-duration',
+                      role: 'cell',
+                      title: activeTitle(row, t, locale, timeZone, idleGapMs),
+                    },
+                    formatDuration(row.durationMs),
+                  ),
+                  React.createElement(
+                    'span',
+                    {
+                      className: 'ss-col-total',
+                      role: 'cell',
+                      title: totalTitle(row, t, locale, timeZone),
+                    },
+                    formatDuration(row.totalMs || 0),
+                  ),
                 )
               }),
             ),
