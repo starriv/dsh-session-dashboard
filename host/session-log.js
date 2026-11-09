@@ -8,6 +8,11 @@
  * `llm/retry-started` closes that slot so a retried attempt is billed again.
  * Model attribution comes from the sample's own `message.source`, with the
  * latest `request/header` config as a fallback.
+ *
+ * Context compaction is a separate provider-billed model request: its usage is
+ * recorded on `compaction/summary` and folded in as an auxiliary sample (the
+ * official `tokenUsage` projection does not include it). It never takes part in
+ * the `(turn, step)` replacement slot.
  */
 
 import { DEFAULT_IDLE_GAP_MS, activityBounds, clipDurationMs, mergeActivityIntervals } from './activity.js'
@@ -164,6 +169,53 @@ export function parseSessionLog(text, { costOf, timeZone, idleGapMs = DEFAULT_ID
   const days = Object.create(null)
   const models = Object.create(null)
   let lastSlot = null
+  const billedCompactions = new Set()
+
+  /**
+   * Price one provider-reported sample and fold it into the session, day and
+   * model decks. Assistant settlements run this through the replacement slot;
+   * auxiliary billed calls (context compaction) reuse the decks directly.
+   */
+  function recordPricedSample(sample, model, provider, modelKey, timeMs) {
+    const cost = costOf(sample, model, provider, timeMs)
+    const dayKey = dayKeyOf(timeMs, timeZone)
+    let day = days[dayKey]
+    if (!day) day = days[dayKey] = emptyDay()
+    addUsage(usage, sample)
+    addToDay(day, sample, cost)
+
+    let bucket = models[modelKey]
+    if (!bucket) {
+      bucket = models[modelKey] = {
+        key: modelKey,
+        provider,
+        model,
+        ...emptyUsage(),
+        costCny: 0,
+        samples: 0,
+      }
+    }
+    addUsage(bucket, sample)
+    bucket.costCny += cost
+    bucket.samples += 1
+
+    // Scoped snapshots need the model that dominated inside the window,
+    // not necessarily the session's all-time primary model.
+    let dayBucket = day.models[modelKey]
+    if (!dayBucket) {
+      dayBucket = day.models[modelKey] = {
+        provider,
+        model,
+        ...emptyUsage(),
+        costCny: 0,
+        samples: 0,
+      }
+    }
+    addUsage(dayBucket, sample)
+    dayBucket.costCny += cost
+    dayBucket.samples += 1
+    return { cost, dayKey, modelKey }
+  }
 
   for (const line of lines) {
     if (!line) continue
@@ -255,51 +307,33 @@ export function parseSessionLog(text, { costOf, timeZone, idleGapMs = DEFAULT_ID
           }
         }
 
-        const cost = costOf(sample, model, provider, timeMs)
-        const dayKey = dayKeyOf(timeMs, timeZone)
-        let day = days[dayKey]
-        if (!day) day = days[dayKey] = emptyDay()
-        addUsage(usage, sample)
-        addToDay(day, sample, cost)
-
-        let bucket = models[modelKey]
-        if (!bucket) {
-          bucket = models[modelKey] = {
-            key: modelKey,
-            provider,
-            model,
-            ...emptyUsage(),
-            costCny: 0,
-            samples: 0,
-          }
-        }
-        addUsage(bucket, sample)
-        bucket.costCny += cost
-        bucket.samples += 1
-
-        // Scoped snapshots need the model that dominated inside the window,
-        // not necessarily the session's all-time primary model.
-        let dayBucket = day.models[modelKey]
-        if (!dayBucket) {
-          dayBucket = day.models[modelKey] = {
-            provider,
-            model,
-            ...emptyUsage(),
-            costCny: 0,
-            samples: 0,
-          }
-        }
-        addUsage(dayBucket, sample)
-        dayBucket.costCny += cost
-        dayBucket.samples += 1
+        const recorded = recordPricedSample(sample, model, provider, modelKey, timeMs)
         lastSlot = {
           turn,
           step,
           usage: sample,
-          cost,
-          dayKey,
+          cost: recorded.cost,
+          dayKey: recorded.dayKey,
           modelKey,
         }
+        break
+      }
+      case 'compaction/summary': {
+        // The context compactor runs its own model request and the provider
+        // reports that request's usage here. It is billed, but it is not part
+        // of the agent's (turn, step) stream, so it never enters the replace
+        // slot; a repeated marker for the same compaction is billed once.
+        const data = event.data || {}
+        const sample = normalizeUsage(data.usage)
+        if (!sample) break
+        const compactionId = typeof data.compactionId === 'string' ? data.compactionId : ''
+        if (compactionId && billedCompactions.has(compactionId)) break
+        const model = typeof data.model === 'string' && data.model ? data.model : requestModel
+        const provider = typeof data.provider === 'string' && data.provider ? data.provider : requestProvider
+        const timeMs = eventTime || lastTime || safeEventTime(header && header.createdAt) || 0
+        const modelKey = model ? `${provider ? `${provider}/` : ''}${model}` : 'unknown'
+        recordPricedSample(sample, model, provider, modelKey, timeMs)
+        if (compactionId) billedCompactions.add(compactionId)
         break
       }
       default:

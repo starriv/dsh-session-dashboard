@@ -10,8 +10,13 @@
 import { resolveTimeZone, zonedParts } from './time.js'
 import { ASTRA_PRICE_ENTRY, ASTRA_PRICE_SOURCE } from './astra-price-snapshot.js'
 
+// Official DeepSeek CNY table (checked 2026-11-10): flash cache-hit 0.04,
+// cache-miss 2, output 8; pro cache-hit 0.3, cache-miss 9, output 27. The
+// idle tier is half of peak, so pro output is 13.5 off-peak — 13.5 must never
+// be written here as the PEAK output rate. DeepSeek has no cache-write charge
+// (the bucket stays at the input rate for providers that do price it).
 const PEAK_FLASH = { cacheRead: 0.04, input: 2, output: 8, cacheWrite: 2 }
-const PEAK_PRO = { cacheRead: 0.3, input: 9, output: 13.5, cacheWrite: 9 }
+const PEAK_PRO = { cacheRead: 0.3, input: 9, output: 27, cacheWrite: 9 }
 
 /**
  * Built-in snapshot. Entries support peak/idle and per-request contextTiers.

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.1
+
+- Fix the built-in `deepseek-v4-pro` **peak output** price: 13.5 → 27.0 CNY per
+  million tokens. 13.5 is the official *off-peak* output rate, so every pro
+  output token was charged at exactly half the official price at both tiers
+  (idle output 6.75 → 13.5). Flash rates, the peak/idle rule and the Astra
+  snapshot were already correct. Source: the official 2026-11-10 DeepSeek
+  pricing page, cross-checked against the pinned community price feed v130.
+- Count provider-reported `compaction/summary` usage. Context compaction is a
+  separate billed model request, and its usage was previously ignored: on the
+  current corpus that under-reported tokens/cost by ~0.06%/0.07% (7 calls in 6
+  sessions). It is now priced at the call's own timestamp/model, deduplicated by
+  `compactionId`, and never enters the `(turn, step)` replacement slot. The
+  official `tokenUsage` projection does not include compaction, so affected
+  sessions may now exceed that projection slightly.
+- Document the estimate's scope in the README: peak windows are Beijing time
+  and PRC statutory holidays are not modeled (the deviation is an overcharge,
+  never an undercharge); Search/Fetch per-successful-request fees, title
+  generation and in-session web-search model calls, interrupted requests and
+  usage from other clients on the same account are not part of the estimate.
+- Tests: update the pro price assertions, add a built-in-table regression test
+  and a compaction-fold test (single bill per `compactionId`, slot isolation).
+  The real-log reconciliation test now treats forked sessions explicitly: their
+  durable log repeats the inherited prefix that the official projection counts,
+  while the dashboard cuts it at the seed marker, so a seeded row may only be
+  lower than that projection.
+
 ## 1.4.0
 
 - The range selector now includes 「今日」/“Today”: one click turns the KPI

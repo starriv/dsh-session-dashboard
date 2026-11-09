@@ -223,13 +223,29 @@ test('Legacy DeepSeek built-ins, half-idle, fallback and override behavior are u
     close(cost(u, policy(), PEAK, name), 12.04)
     close(cost(u, policy(), IDLE, name), 6.02)
   }
-  close(cost(u, policy(), PEAK, 'deepseek-v4-pro'), 31.8)
-  close(cost(u, policy(), WEEKEND, 'deepseek-v4-pro'), 15.9)
+  close(cost(u, policy(), PEAK, 'deepseek-v4-pro'), 45.3)
+  close(cost(u, policy(), WEEKEND, 'deepseek-v4-pro'), 22.65)
   const p = policy({ pricing: { 'deepseek-flash': { input: 4 } } })
   close(cost(u, p, PEAK, 'deepseek-flash'), 16.04)
   close(cost(u, p, IDLE, 'deepseek-flash'), 8.02)
   const disabled = policy({ pricing: { 'deepseek-flash': null } })
   close(cost(u, disabled, PEAK, 'deepseek-flash'), 0)
+})
+
+test('built-in DeepSeek rates match the official 2026-11-10 CNY table', () => {
+  const models = policy().summary().models
+  assert.deepEqual(models['deepseek-flash'].peak, { cacheRead: 0.04, input: 2, output: 8, cacheWrite: 2 })
+  assert.deepEqual(models['deepseek-flash'].idle, { cacheRead: 0.02, input: 1, output: 4, cacheWrite: 1 })
+  assert.deepEqual(models['deepseek-v4-pro'].peak, { cacheRead: 0.3, input: 9, output: 27, cacheWrite: 9 })
+  assert.deepEqual(models['deepseek-v4-pro'].idle, { cacheRead: 0.15, input: 4.5, output: 13.5, cacheWrite: 4.5 })
+  // 13.5 is the pro OFF-PEAK output rate; the peak rate is 27.0.
+  close(cost(usage(0, 1_000_000), policy(), PEAK, 'deepseek-v4-pro'), 27)
+  close(cost(usage(0, 1_000_000), policy(), IDLE, 'deepseek-v4-pro'), 13.5)
+  // Retired flash ids are served by the current Flash model at Flash prices.
+  for (const name of ['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']) {
+    close(cost(usage(0, 1_000_000), policy(), PEAK, name), 8)
+    close(cost(usage(0, 1_000_000), policy(), WEEKEND, name), 4)
+  }
 })
 
 test('Astra invalid usage fields are finite and nonnegative; fold normalizes malformed samples', () => {

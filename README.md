@@ -110,9 +110,13 @@ IANA 时区为准：`timeZone` 只在请求未带 `tz`（例如直接用 API 访
 - **数据源**：`$DSH_HOME/sessions/<workspace>/<session>/session.vN.jsonl[.zstd]`，
   选择最高代际，压缩格式优先；多帧 zstd 逐帧解压。
 - **Token**：只统计 provider usage 中的 `inputTokens`、`outputTokens`、
-  `cacheReadTokens` 和 `cacheWriteTokens`，总量为四项之和。
+  `cacheReadTokens` 和 `cacheWriteTokens`，总量为四项之和。主循环样本与官方
+  `tokenUsage` 投影逐项对账；此外也计入 `compaction/summary` 中 provider 上报的
+  上下文压缩调用用量（一次独立的计费请求，同一 `compactionId` 只计一次）。官方
+  `tokenUsage` 投影不含压缩调用，因此发生过压缩的会话可能略高于该投影。
 - **重试与流式响应**：同一 `(turn, step)` 的后续样本替换旧样本；
   `llm/retry-started` 结束当前替换槽；`assistant/attempt` 读取流内最后一个 usage。
+  压缩调用不属于 `(turn, step)` 流，不进入替换槽。
 - **分叉会话**：按 `session/end-seed` 的 `seq` 截断继承前缀，兼容历史 `seedLength`。
 - **时间窗口**：按**用户浏览器所在时区**的自然日划分；前端每次请求都会上报 IANA 时区，
   「今日」即用户本地时区的当天 0 点到现在。`timeZone` 只在浏览器未上报或上报非法时兜底，
@@ -138,13 +142,39 @@ IANA 时区为准：`timeZone` 只在请求未带 `tz`（例如直接用 API 访
   跨度，以及总时长的会话跨度。
 - **去重**：同一 header `id` 的复制或恢复会话只计最新一份。
 - **缓存命中率**：`缓存读取 /（缓存读取 + 输入未命中）`。
-- **费用**：每个样本按时间和模型计价，峰时与空闲分别取价；默认使用 CNY 列表价快照，
-  结果为估算值，不代表平台账单。
+- **费用**：每个样本按发生时刻与模型计价，峰时与空闲分别取价；默认使用 CNY 列表价
+  快照，结果为估算值，不代表平台账单。
 
-峰时窗口默认为 `Asia/Shanghai` 工作日 09:00–12:00 和 14:00–18:00。原有 DeepSeek
-模型及兜底模型空闲时段按半价计算；`flat: true` 的模型不享受隐式峰谷折扣。
-`pricing` 支持部分覆盖，也可用 `null` 禁用某个模型；`peakWindows` 支持数字分钟或
-`HH:MM` 格式。
+峰时窗口默认为**北京时间**（由 `timeZone` 决定，默认 `Asia/Shanghai`）周一至周五
+09:00–12:00 和 14:00–18:00，其余时段（含周末）为空闲；空闲价默认是高峰价的一半。
+`flat: true` 的模型不享受隐式峰谷折扣。`pricing` 支持部分覆盖，也可用 `null` 禁用
+某个模型；`peakWindows` 支持数字分钟或 `HH:MM` 格式。
+
+内置 DeepSeek 价格快照（CNY / 百万 Token，核对日期 2026-11-10）：
+
+| 模型 | 缓存命中（空闲 / 高峰） | 缓存未命中（空闲 / 高峰） | 输出（空闲 / 高峰） |
+| --- | ---: | ---: | ---: |
+| `deepseek-flash`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、兜底 | 0.02 / 0.04 | 1 / 2 | 4 / 8 |
+| `deepseek-v4-pro` | 0.15 / 0.30 | 4.5 / 9.0 | 13.5 / **27.0** |
+
+来源为 DeepSeek 官方[模型 & 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)页
+（英文页 USD 表同比例）。旧模型名 `deepseek-v4-flash` 与
+`deepseek-v4-flash-vision-exp` 现由 DeepSeek-V4.1-Flash 承接并按 Flash 价格计费。
+官方价目表没有缓存写入计费项，实际样本中 `cacheWriteTokens` 恒为 0。
+
+### 估算范围
+
+「估算花费」只覆盖会话日志里 provider 上报的 Token 用量。以下开销不在估算内，
+也不做猜测性补价：
+
+- **Search / Fetch 次数费**：自北京时间 2026-11-01 00:00 起，DeepSeek 对成功请求按
+  5 元 / 千次计费。日志记录工具调用及其整体结果（`tool/result`），但一次模型请求
+  可能触发多次服务端计费请求，无法据此还原成功请求数与金额。
+- **标题生成与会话内网页搜索的模型调用**：日志中有请求体但没有 usage 记录，
+  无法按 Token 计价。
+- **中断或失败的请求**：`interrupted` 的消息、失败的尝试可能只有部分计费，
+  日志未上报 usage。
+- **同一账号下其他客户端的用量**：插件只读取本机 `$DSH_HOME/sessions`。
 
 ### GPT-6 Astra 估算与上下文阶梯
 
@@ -165,8 +195,9 @@ Astra 全天、周末同价；`gpt-6-astra-fast` 等变体不会被当作 Astra 
 最高阈值。部分覆盖继承已有价格及档位，显式 `contextTiers: []` 关闭阶梯。
 `provider/model` 覆盖仍优先于裸模型名。有效档位及快照来源包含在 `pricing` 响应中。
 
-此次变更不修改其他模型的原有兜底、Token 归并或辅助调用统计范围。价格代码更新后
-需重新加载插件，重建内存中的历史计价缓存；仅刷新浏览器不会重算旧 Host 缓存。
+Astra 的这次变更不涉及其他模型的兜底价格、峰谷行为与 Token 归并范围（压缩调用的
+计费口径见上文「数据口径」）。价格代码更新后需重新加载插件，重建内存中的历史计价
+缓存；仅刷新浏览器不会重算旧 Host 缓存。
 
 ## 安全与隐私
 
@@ -198,8 +229,8 @@ npm pack --dry-run
 - **构建可复现**：仓库提交了 `client.js` 和 `package-lock.json`。CI 在 Ubuntu
   Node 22/24 和 macOS Node 22 上执行 `npm ci`、`npm test`、`npm pack --dry-run`，
   并检查重建后的 `client.js` 与提交文件无差异。
-- **测试覆盖**：60 个 Node 测试，覆盖真实日志与官方 `tokenUsage` 对账、活跃时长
-  区间合并与范围裁剪、zstd 多帧/截断/损坏、重试与分叉、上期窗口、鉴权默认拒绝、
+- **测试覆盖**：70 个 Node 测试，覆盖真实日志与官方 `tokenUsage` 对账、压缩调用计费、
+  活跃时长区间合并与范围裁剪、zstd 多帧/截断/损坏、重试与分叉、上期窗口、鉴权默认拒绝、
   异常 usage/time 样本、重复 id、plain JSONL 预算、SSR/DOM、范围切换加载占位、
   locale 和构建模块格式。
   依赖 `~/.dsh/sessions` 的真实日志测试在无会话时跳过；合成数据测试仍会执行。
@@ -209,6 +240,13 @@ npm pack --dry-run
 ## 已知限制
 
 - 费用为本地估算；价格或峰时策略变化时，请使用 `pricing` 或 `peakWindows` 覆盖。
+  内置价格是快照，不会自动联网同步。
+- 未内置中国法定节假日日历：官方在法定节假日**全天**按空闲价计费，插件仍按工作日峰时
+  计价，因此法定假日附近的工作时段会略偏高（只会偏高，不会偏低）。
+- 价格表按模型名精确匹配，未识别的模型回退到 Flash 价格；新增的付费模型请用
+  `pricing` 显式配置，否则会按较低价格估算。
+- Search / Fetch 次数费、标题生成与会话内网页搜索的模型调用、中断请求的未上报用量，
+  以及同一账号下其他客户端的消费都不在估算内，详见上文「估算范围」。
 - 当前直接读取会话文件，而非通过 Session 服务；正在追加的尾部帧会在下一次扫描时计入。
 - 历史 v0–v3 日志若尚未迁移到当前格式，usage 行可能无法完整解析。
 - 首次冷扫描在 Host 主线程执行 JSON 解析；已设置文件、解码和数量上限，但超大历史

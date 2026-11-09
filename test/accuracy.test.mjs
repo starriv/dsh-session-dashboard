@@ -290,6 +290,55 @@ test('usage fold mirrors the official retry/replacement semantics', () => {
   assert.equal(session.usage.totalTokens, 160)
 })
 
+test('billed compaction summary usage is priced once without touching the settle slot', () => {
+  const base = Date.UTC(2026, 10, 4, 2, 0) // Wednesday 10:00 Asia/Shanghai: peak
+  const usage = (input, output, cacheRead = 0) => ({
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: 0,
+  })
+  const source = { model: 'deepseek-flash', provider: 'deepseek-account' }
+  const lines = [
+    { type: 'session', version: 4, id: 'session-compaction', createdAt: base, cwd: '/tmp/demo' },
+    { type: 'request/header', seq: 0, time: base, data: { header: { config: { model: 'deepseek-flash', provider: 'deepseek-account' } } } },
+    { type: 'assistant/message', seq: 1, time: base + 1_000, data: { turn: 1, step: 1, usage: usage(10, 20), message: { source } } },
+    { type: 'compaction/start', seq: 2, time: base + 2_000, data: { compactionId: 'c1' } },
+    // The summarizer's own provider usage: a separate billed request.
+    {
+      type: 'compaction/summary',
+      seq: 3,
+      time: base + 3_000,
+      data: { compactionId: 'c1', usage: usage(5, 7, 30), provider: 'deepseek-account', model: 'deepseek-flash' },
+    },
+    // A repeated marker for the same compaction must not be billed twice.
+    { type: 'compaction/summary', seq: 4, time: base + 3_001, data: { compactionId: 'c1', usage: usage(5, 7, 30) } },
+    { type: 'compaction/end', seq: 5, time: base + 3_002, data: { compactionId: 'c1' } },
+    { type: 'assistant/message', seq: 6, time: base + 4_000, data: { turn: 2, step: 1, usage: usage(1, 2), message: { source } } },
+    // A compaction without an id still bills, it just cannot be deduplicated.
+    { type: 'compaction/summary', seq: 7, time: base + 5_000, data: { usage: usage(2, 3), model: 'deepseek-flash' } },
+  ]
+  const pricing = createPricing({ timeZone: ZONE })
+  const session = parseSessionLog(lines.map((line) => JSON.stringify(line)).join('\n'), {
+    costOf: pricing.costOf,
+    timeZone: ZONE,
+  })
+  assert.equal(session.usage.inputTokens, 10 + 5 + 1 + 2)
+  assert.equal(session.usage.outputTokens, 20 + 7 + 2 + 3)
+  assert.equal(session.usage.cacheReadTokens, 30)
+  assert.equal(session.usage.totalTokens, 80)
+  assert.equal(session.models.length, 1)
+  assert.equal(session.models[0].samples, 4)
+  const day = session.days[dayKeyOf(base + 3_000, ZONE)]
+  assert.equal(day.totalTokens, 80)
+  assert.equal(day.costCny, session.costCny)
+  const expected = pricing.costOf(usage(10, 20), 'deepseek-flash', 'deepseek-account', base + 1_000)
+    + pricing.costOf(usage(5, 7, 30), 'deepseek-flash', 'deepseek-account', base + 3_000)
+    + pricing.costOf(usage(1, 2), 'deepseek-flash', 'deepseek-account', base + 4_000)
+    + pricing.costOf(usage(2, 3), 'deepseek-flash', 'deepseek-account', base + 5_000)
+  assert.ok(Math.abs(session.costCny - expected) < 1e-12, `${session.costCny} != ${expected}`)
+})
+
 test('real store snapshot reconciles with the official tokenUsage projection', { skip: !(await hasSessions()) }, async () => {
   const store = createStore()
   await store.ensureFresh(true)
@@ -309,7 +358,13 @@ test('real store snapshot reconciles with the official tokenUsage projection', {
   }
 
   const cacheDir = path.join(DSH_HOME, 'storages', 'session_projcache', 'sessions')
+  // A forked session's durable log repeats the inherited prefix, and the
+  // official projection folds that copy into its totals. The dashboard cuts the
+  // prefix at the seed marker so the parent's billed calls are not counted
+  // twice, so a seeded row can only be lower than the projection.
+  const seededIds = new Set(store.parsed.filter((session) => session.isSeeded).map((session) => session.id))
   let exact = 0
+  let seededPrefix = 0
   let cacheStale = 0
   for (const row of snapshot.ranking) {
     let record
@@ -328,9 +383,19 @@ test('real store snapshot reconciles with the official tokenUsage projection', {
       exact += 1
       continue
     }
+    if (seededIds.has(row.id)) {
+      seededPrefix += 1
+      assert.ok(row.inputTokens <= totals.uncachedInputTokens, `${row.id} seeded input exceeded the projection`)
+      assert.ok(row.outputTokens <= totals.outputTokens, `${row.id} seeded output exceeded the projection`)
+      assert.ok(row.cacheReadTokens <= totals.cacheReadTokens, `${row.id} seeded cacheRead exceeded the projection`)
+      assert.ok(row.cacheWriteTokens <= totals.cacheWriteTokens, `${row.id} seeded cacheWrite exceeded the projection`)
+      continue
+    }
     // A live session's durable log can be ahead of its last projection-cache
-    // checkpoint. The log is the source of truth, so the fold may only be
-    // ahead of the cache, never behind it.
+    // checkpoint, and a session with billed compaction calls is ahead by design:
+    // the official `tokenUsage` projection does not include compaction. The log
+    // is the source of truth, so the fold may only be ahead of the cache, never
+    // behind it.
     cacheStale += 1
     assert.ok(row.inputTokens >= totals.uncachedInputTokens, `${row.id} input regressed`)
     assert.ok(row.outputTokens >= totals.outputTokens, `${row.id} output regressed`)
@@ -338,6 +403,7 @@ test('real store snapshot reconciles with the official tokenUsage projection', {
   }
   assert.ok(exact >= snapshot.ranking.length * 0.5, `expected many sessions to reconcile exactly (${exact}/${snapshot.ranking.length})`)
   assert.ok(cacheStale < snapshot.ranking.length)
+  assert.ok(seededPrefix <= snapshot.ranking.length)
 
   const expectedDays = recentDayKeys(dayKeyOf(Date.now(), ZONE), 30)
   assert.deepEqual(snapshot.daily.map((day) => day.date), expectedDays)
