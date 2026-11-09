@@ -108,6 +108,24 @@ test('host apply registers routes and serves a complete snapshot', { skip: !HAS_
   assert.equal(invalidScope.status, 200)
   assert.equal(invalidScope.json.scope, 'all')
 
+  // An invalid zone resolves back to the configured zone.
+  const invalidZone = await call(routes[0], '/dsh-session-stats/snapshot?scope=1&tz=Not/AZone')
+  assert.equal(invalidZone.status, 200)
+  assert.equal(invalidZone.json.timeZone, 'Asia/Shanghai')
+  assert.equal(invalidZone.json.daily.length, 1)
+
+  const todayInZone = await call(routes[0], '/dsh-session-stats/snapshot?scope=1&tz=Asia/Tokyo')
+  assert.equal(todayInZone.status, 200)
+  assert.equal(todayInZone.json.scope, 1)
+  assert.equal(todayInZone.json.timeZone, 'Asia/Tokyo')
+  assert.equal(todayInZone.json.daily.length, 1)
+  assert.equal(todayInZone.json.previousDaily.length, 1)
+  assert.equal(typeof todayInZone.json.previous, 'object')
+  assert.equal(
+    todayInZone.json.daily.reduce((sum, day) => sum + day.totalTokens, 0),
+    todayInZone.json.totals.totalTokens,
+  )
+
   const head = await call(routes[0], '/dsh-session-stats/ping', 'HEAD')
   assert.equal(head.status, 200)
   assert.equal(head.json, null)

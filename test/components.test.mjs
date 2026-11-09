@@ -63,4 +63,16 @@ test('dashboard sections server-render with realistic data', async () => {
   assert.ok(dashboard.includes('ss-ranking'))
   assert.ok(dashboard.includes('本地日志'))
   assert.ok(!dashboard.includes('NaN'))
+
+  const todayCard = harness.renderTodayCard()
+  assert.ok(todayCard.includes('Token 堆叠 · 今日'), 'the one-day scope reads as today, not "近 1 天"')
+  assert.ok(todayCard.includes('ss-bar-segment'), 'the today card still draws its bar')
+  assert.ok(!todayCard.includes('近 1 天'), 'a one-day window is never labelled with a broken day count')
+  assert.ok(!todayCard.includes('NaN'))
+
+  const pendingToday = harness.renderTodayCardPending()
+  assert.ok(pendingToday.includes('Token 堆叠 · 今日'), 'the pending one-day card keeps the today label')
+  assert.ok(pendingToday.includes('ss-skeleton-bar'), 'the pending one-day card shows one bar placeholder')
+  assert.ok(!pendingToday.includes('ss-bar-segment'), 'no real bars while pending')
+  assert.ok(!pendingToday.includes('近 1 天'))
 })

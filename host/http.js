@@ -8,6 +8,7 @@
  */
 
 import { normalizeScope } from './scope.js'
+import { resolveTimeZone } from './time.js'
 
 const ROUTE_PREFIX = '/dsh-session-stats'
 
@@ -82,8 +83,12 @@ export function registerStatsRoutes(ctx, { store, monitor, version }) {
         }
         if (pathname === `${ROUTE_PREFIX}/snapshot`) {
           const scope = normalizeScope(url.searchParams.get('scope'))
+          // Calendar days belong to the user's zone, not the Host's: the
+          // browser sends its IANA zone. Invalid/missing values fall back to
+          // the configured zone instead of failing the snapshot.
+          const dayTimeZone = resolveTimeZone(url.searchParams.get('tz'), store.config.timeZone)
           const force = url.searchParams.get('force') === '1'
-          const snapshot = await store.snapshot(scope, force)
+          const snapshot = await store.snapshot(scope, force, dayTimeZone)
           json(res, 200, {
             ...snapshot,
             runtime: monitor.snapshot(),

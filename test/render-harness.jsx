@@ -73,3 +73,34 @@ export function renderDashboard() {
     }),
   )
 }
+
+/** The single-day ("今日") variant of the daily card while its scope loads. */
+export function renderTodayCardPending() {
+  return renderToString(
+    React.createElement(DailyUsageCard, {
+      daily: fixture.daily.slice(-1),
+      previous: fixture.previousDaily.slice(-1),
+      trendDays: 1,
+      allTime: false,
+      pending: true,
+      requestedScope: '1',
+      t,
+      locale: 'zh',
+    }),
+  )
+}
+
+/** The single-day ("今日") variant of the daily card, rendered without a scope switch. */
+export function renderTodayCard() {
+  return renderToString(
+    React.createElement(DailyUsageCard, {
+      daily: fixture.daily.slice(-1),
+      previous: fixture.previousDaily.slice(-1),
+      trendDays: 1,
+      allTime: false,
+      requestedScope: '1',
+      t,
+      locale: 'zh',
+    }),
+  )
+}

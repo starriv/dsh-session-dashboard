@@ -210,6 +210,7 @@ export function StatsPage({ translate, localeStore }) {
   const { data, pending, retrying, error, refreshing, updatedAt, refresh } = useStatsSnapshot(scope)
   const scopeOptions = React.useMemo(() => [
     { value: 'all', label: t('scope.all') },
+    { value: '1', label: t('scope.today') },
     ...[7, 14, 30].map((days) => ({
       value: String(days),
       label: `${t('scope.last')} ${days} ${t('scope.daysUnit')}`.trim(),

@@ -5,8 +5,26 @@ import * as React from 'react'
 const POLL_MS = 5000
 const FETCH_TIMEOUT_MS = 15_000
 
+/**
+ * The browser's IANA zone is the user's real "today". The Host cannot infer
+ * it, so every snapshot request carries it and the Host rebuckets calendar
+ * days accordingly. A Host without a browser falls back to its configured zone.
+ */
+function browserTimeZone() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return typeof zone === 'string' ? zone : ''
+  } catch {
+    return ''
+  }
+}
+
 function endpoint(scope, force) {
   const params = new URLSearchParams({ scope: String(scope) })
+  // Re-read the zone on every poll so a browser/OS zone change is picked up
+  // without reloading the dashboard; the Host rebuilds buckets when it changes.
+  const zone = browserTimeZone()
+  if (zone) params.set('tz', zone)
   if (force) params.set('force', '1')
   return `/dsh-session-stats/snapshot?${params.toString()}`
 }

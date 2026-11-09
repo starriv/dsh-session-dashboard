@@ -12,10 +12,10 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { activityBounds, clipActivityIntervals } from './activity.js'
 import { createPricing } from './pricing.js'
-import { normalizeScope } from './scope.js'
+import { MAX_SCOPE_DAYS, normalizeScope } from './scope.js'
 import { parseSessionLog } from './session-log.js'
 import { loadCachedTitles } from './titles.js'
-import { dayKeyOf, dayStartMs, recentDayKeys, shiftDayKey } from './time.js'
+import { dayKeyOf, dayStartMs, recentDayKeys, resolveTimeZone, shiftDayKey } from './time.js'
 import { decompressZstdFrames } from './zstd.js'
 
 const SESSION_FILE = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/
@@ -120,19 +120,179 @@ export class StatsStore {
   constructor(config) {
     this.config = config
     this.pricing = createPricing(config)
-    this.files = new Map() // file path -> { mtimeMs, size, session }
-    this.sequence = 0
+    // The active corpus is the parsed sessions plus their per-file cache for
+    // one display zone. Day buckets are produced while parsing, so a corpus is
+    // only valid for the zone it was built in.
+    this.files = new Map() // file path -> { mtimeMs, ctimeMs, size, session }
+    this.parsed = []
+    this.cacheZone = this.pricing.timeZone
+    this.cacheDays = new Set() // every day key present in `parsed`
     this.scannedAt = 0
-    this.errors = 0
-    this.scanPromise = null
     this.lastScanAt = 0
     this.truncated = false
+    this.listingIncomplete = false
+    this.errors = 0
     this.skipped = []
+    // One spare corpus lets two browser zones alternate without a full
+    // re-parse. More than two zones rebuild on demand, which bounds memory.
+    this.alternateCorpus = null
+    // Last whole-corpus rebuild caused by a display-zone switch. Several
+    // calendars polling in turn must not turn every request into a re-scan.
+    this.lastRebuildAt = 0
+    this.sequence = 0
+    this.scanPromise = null
     this.lastForcedAt = 0
     this.titleAttempted = new Set()
   }
 
-  async ensureFresh(force = false) {
+  /** Snapshot the active corpus so it can be stashed or restored atomically. */
+  activeCorpus() {
+    return {
+      zone: this.cacheZone,
+      files: this.files,
+      parsed: this.parsed,
+      cacheDays: this.cacheDays,
+      scannedAt: this.scannedAt,
+      lastScanAt: this.lastScanAt,
+      truncated: this.truncated,
+      listingIncomplete: this.listingIncomplete,
+      errors: this.errors,
+      skipped: this.skipped,
+    }
+  }
+
+  /** Make `corpus` the active one without copying its records. */
+  loadCorpus(corpus) {
+    this.cacheZone = corpus.zone
+    this.files = corpus.files
+    this.parsed = corpus.parsed
+    this.cacheDays = corpus.cacheDays
+    this.scannedAt = corpus.scannedAt
+    this.lastScanAt = corpus.lastScanAt
+    this.truncated = corpus.truncated
+    this.listingIncomplete = corpus.listingIncomplete
+    this.errors = corpus.errors
+    this.skipped = corpus.skipped
+  }
+
+  /**
+   * Switch the active corpus to `zone`. The previous corpus is kept as the
+   * single alternate, so two zones polling in turn cost one rebuild each rather
+   * than one rebuild per request. A third zone evicts the spare and rebuilds.
+   */
+  switchCorpus(zone) {
+    const current = this.activeCorpus()
+    const alternate = this.alternateCorpus
+    this.alternateCorpus = current
+    if (alternate && alternate.zone === zone) {
+      this.loadCorpus(alternate)
+      return 'restored'
+    }
+    this.loadCorpus({
+      zone,
+      files: new Map(),
+      parsed: [],
+      cacheDays: new Set(),
+      scannedAt: 0,
+      lastScanAt: 0,
+      truncated: false,
+      listingIncomplete: false,
+      errors: 0,
+      skipped: [],
+    })
+    return 'rebuilt'
+  }
+
+  /**
+   * Whether a whole-corpus rebuild is allowed now. Deferring a rebuild serves
+   * the current calendar until `zoneRebuildMs` has passed; two calendars that
+   * merely alternate are already served by the spare corpus and never wait.
+   */
+  canRebuild() {
+    const window = Number.isFinite(this.config.zoneRebuildMs)
+      ? this.config.zoneRebuildMs
+      : 30_000
+    if (window <= 0 || this.lastRebuildAt === 0) return true
+    return Date.now() - this.lastRebuildAt >= window
+  }
+
+  /**
+   * Whether `zone` labels the cached corpus with exactly the same calendar days
+   * as `cacheZone` for every day a snapshot can aggregate. Distinct identifiers
+   * can share day boundaries all year (`Asia/Shanghai` and `Asia/Singapore` are
+   * both UTC+8), so the parsed corpus only needs relabelling, not re-parsing.
+   *
+   * Scoped views aggregate at most the last `2 * MAX_SCOPE_DAYS` days (the
+   * window and the previous window) and all-time totals are zone-independent,
+   * so older buckets never re-enter a window and may keep their labels.
+   * Future-dated buckets (clock skew) are checked too because they can enter a
+   * window later.
+   *
+   * A truncated or partially listed corpus may hide sessions this check cannot
+   * see, so such a corpus is rebuilt instead of relabelled.
+   *
+   * @param {string} zone IANA zone to compare against `cacheZone`
+   * @returns {boolean}
+   */
+  sameCalendar(zone) {
+    const cached = this.cacheZone
+    if (zone === cached) return true
+    if (this.truncated || this.listingIncomplete) return false
+    const now = Date.now()
+    const cachedToday = dayKeyOf(now, cached)
+    if (dayKeyOf(now, zone) !== cachedToday) return false
+    // Every day a window can address, plus the start of the next day.
+    for (let offset = -2 * MAX_SCOPE_DAYS - 2; offset <= 1; offset += 1) {
+      const key = shiftDayKey(cachedToday, offset)
+      if (dayStartMs(key, cached) !== dayStartMs(key, zone)) return false
+    }
+    const tomorrowKey = shiftDayKey(cachedToday, 1)
+    let future = 0
+    for (const date of this.cacheDays) {
+      if (date <= tomorrowKey) continue
+      // A corrupt future clock must not make this check unbounded.
+      future += 1
+      if (future > 512) return false
+      if (dayStartMs(date, cached) !== dayStartMs(date, zone)) return false
+    }
+    return true
+  }
+
+  /**
+   * @param {boolean} [force] manual-refresh affordance
+   * @param {string} [dayTimeZone] IANA zone used for calendar-day buckets
+   * @returns {Promise<{ sessions: object[], zone: string }>} corpus and the
+   *   calendar it is labelled in (the requested zone unless a rebuild is
+   *   currently throttled)
+   */
+  async ensureFresh(force = false, dayTimeZone) {
+    const requested = resolveTimeZone(dayTimeZone, this.cacheZone)
+    // A running scan commits records for one zone. Wait for it before switching
+    // zones so the cache can never mix two calendars; the retry loop also
+    // covers a concurrent request that started another zone's scan meanwhile.
+    while (this.scanPromise) {
+      try {
+        await this.scanPromise
+      } catch {
+        // The initiating request owns the error; a zone switch still retries.
+      }
+    }
+    if (requested !== this.cacheZone) {
+      if (this.sameCalendar(requested)) {
+        // Same calendar under another identifier: relabel in place.
+        this.cacheZone = requested
+      } else {
+        const spare = this.alternateCorpus
+        if (spare && spare.zone === requested) {
+          this.switchCorpus(requested)
+        } else if (this.canRebuild()) {
+          const outcome = this.switchCorpus(requested)
+          if (outcome === 'rebuilt') this.lastRebuildAt = Date.now()
+        }
+        // Throttled: keep serving the current corpus/calendar for this request.
+      }
+    }
+    const zone = this.cacheZone
     if (force) {
       // `force=1` is a manual refresh affordance, not a free unbounded rescan
       // primitive. Rapid authenticated requests still share the last scan.
@@ -140,15 +300,18 @@ export class StatsStore {
       if (this.lastForcedAt > 0 && now - this.lastForcedAt < 1000) force = false
       else this.lastForcedAt = now
     }
-    if (!force && this.lastScanAt > 0 && Date.now() - this.lastScanAt < this.config.refreshMs) return
-    if (this.scanPromise) return this.scanPromise
-    this.scanPromise = this.scan().finally(() => {
+    if (!force && this.lastScanAt > 0 && Date.now() - this.lastScanAt < this.config.refreshMs) {
+      return { sessions: this.parsed, zone }
+    }
+    this.scanPromise = this.scan(zone).finally(() => {
       this.scanPromise = null
     })
-    return this.scanPromise
+    const sessions = await this.scanPromise
+    return { sessions, zone }
   }
 
-  async scan() {
+  async scan(dayTimeZone = this.cacheZone) {
+    const zone = resolveTimeZone(dayTimeZone, this.cacheZone)
     const startedAt = Date.now()
     let discovered
     try {
@@ -161,7 +324,7 @@ export class StatsStore {
       return this.parsed || []
     }
     const files = discovered.files
-    this.truncated = discovered.truncated
+    const truncated = discovered.truncated
     const incompleteListing = discovered.incomplete
     let changed = false
     let errors = 0
@@ -213,7 +376,7 @@ export class StatsStore {
           : buffer.toString('utf8')
         const session = parseSessionLog(text, {
           costOf: this.pricing.costOf,
-          timeZone: this.pricing.timeZone,
+          timeZone: zone,
           idleGapMs: this.config.idleGapMs,
         })
         if (!session) throw new Error('session log has no header')
@@ -241,7 +404,7 @@ export class StatsStore {
       }
       errors += 1
     }
-    if (!this.truncated && !incompleteListing) {
+    if (!truncated && !incompleteListing) {
       for (const key of Array.from(this.files.keys())) {
         if (!seen.has(key)) {
           this.files.delete(key)
@@ -267,18 +430,32 @@ export class StatsStore {
       for (const id of untitled) this.titleAttempted.add(id)
     }
 
-    this.parsed = parsed
-    this.scannedAt = startedAt
-    this.lastScanAt = Date.now()
-    this.errors = errors
-    this.skipped = skipped
+    // Commit the corpus and its scan metadata together: a scan that raced a
+    // zone switch must not leave records or diagnostics from another calendar.
+    if (this.cacheZone === zone) {
+      this.parsed = parsed
+      const cacheDays = new Set()
+      for (const session of parsed) {
+        for (const date of Object.keys(session.days || {})) cacheDays.add(date)
+      }
+      this.cacheDays = cacheDays
+      this.scannedAt = startedAt
+      this.lastScanAt = Date.now()
+      this.truncated = truncated
+      this.listingIncomplete = incompleteListing
+      this.errors = errors
+      this.skipped = skipped
+    }
     if (changed) this.sequence += 1
     return parsed
   }
 
-  buildSnapshot(rawScope = this.config.scope) {
+  buildSnapshot(rawScope = this.config.scope, rawZone = this.cacheZone, sessionsInput) {
     const scope = normalizeScope(rawScope)
-    const rawSessions = this.parsed || []
+    // The display zone is the user's (browser) zone when supplied; the
+    // configured zone stays the Host-side fallback and the pricing/peak zone.
+    const timeZone = resolveTimeZone(rawZone, this.cacheZone)
+    const rawSessions = Array.isArray(sessionsInput) ? sessionsInput : (this.parsed || [])
     // Copied/restored session directories can carry the same header id. Fold
     // each id once, keeping the freshest copy, so totals and React keys stay
     // unique.
@@ -296,17 +473,17 @@ export class StatsStore {
     const duplicates = rawSessions.length - sessions.length
     const scoped = typeof scope === 'number'
     const now = Date.now()
-    const todayKey = dayKeyOf(now, this.pricing.timeZone)
+    const todayKey = dayKeyOf(now, timeZone)
     const trendDays = scoped
       ? scope
       : (Number.isInteger(this.config.trendDays) && this.config.trendDays > 0 ? this.config.trendDays : 30)
     const trendKeys = recentDayKeys(todayKey, trendDays)
     const scopeKeys = scoped ? recentDayKeys(todayKey, scope) : null
     const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null
-    const scopeStartMs = scoped ? dayStartMs(scopeKeys[0], this.pricing.timeZone) : 0
+    const scopeStartMs = scoped ? dayStartMs(scopeKeys[0], timeZone) : 0
     // Scoped duration is also clipped at the end of today so a corrupt future
     // clock cannot make a 7-day view report more than seven days.
-    const scopeEndMs = scoped ? dayStartMs(shiftDayKey(todayKey, 1), this.pricing.timeZone) : 0
+    const scopeEndMs = scoped ? dayStartMs(shiftDayKey(todayKey, 1), timeZone) : 0
     const previousTrendKeys = recentDayKeys(shiftDayKey(trendKeys[0], -1), trendDays)
     const previousTrendSet = new Set(previousTrendKeys)
     const daily = new Map(trendKeys.map((date) => [date, {
@@ -493,7 +670,7 @@ export class StatsStore {
       truncated: this.truncated,
       errors: this.errors,
       skipped: this.skipped,
-      timeZone: this.pricing.timeZone,
+      timeZone,
       idleGapMs: this.config.idleGapMs,
       scope,
       trendDays,
@@ -520,15 +697,23 @@ export class StatsStore {
         : null,
       daily: dayList,
       previousDaily: previousDayList,
-      since: since || null,
+      // In a scoped view the meaningful baseline is the window start, not the
+      // first session ever recorded (which can predate the window by months).
+      since: scoped ? scopeStartMs : (since || null),
       ranking: rankingPage,
       rankingDuration,
       rankingTotal,
       pricing: this.pricing.summary(),
     }
   }
-  async snapshot(scope = this.config.scope, force = false) {
-    await this.ensureFresh(force)
-    return this.buildSnapshot(scope)
+  async snapshot(scope = this.config.scope, force = false, dayTimeZone) {
+    // Store-level callers get the documented configured-zone fallback; the HTTP
+    // layer resolves the browser zone before calling. Background scans call
+    // `ensureFresh` directly so they keep warming the corpus in use.
+    const requested = resolveTimeZone(dayTimeZone, this.pricing.timeZone)
+    const { sessions, zone } = await this.ensureFresh(force, requested)
+    // `zone` can differ from `requested` while a rebuild is throttled: the
+    // snapshot must be labelled in the calendar it was actually built for.
+    return this.buildSnapshot(scope, zone, sessions)
   }
 }

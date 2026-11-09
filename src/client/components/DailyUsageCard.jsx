@@ -23,7 +23,9 @@ export function DailyUsageCard({ daily, previous, trendDays, allTime, pending = 
   const averageCost = rows.length > 0 ? rangeCost / rows.length : 0
   const subtitle = targetAllTime
     ? `${t('daily.subtitle')} · ${t('daily.trend')} ${targetDays} ${t('daily.days')}`
-    : `${t('daily.subtitle')} · ${t('scope.last')} ${targetDays} ${t('daily.days')}`
+    : targetDays === 1
+      ? `${t('daily.subtitle')} · ${t('scope.today')}`
+      : `${t('daily.subtitle')} · ${t('scope.last')} ${targetDays} ${t('daily.days')}`
 
   return React.createElement(
     Card,

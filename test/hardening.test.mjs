@@ -7,7 +7,7 @@ import { resolveConfig } from '../host/config.js'
 import { normalizeScope } from '../host/scope.js'
 import { parseSessionLog } from '../host/session-log.js'
 import { StatsStore } from '../host/store.js'
-import { dayKeyOf, dayStartMs } from '../host/time.js'
+import { dayKeyOf, dayStartMs, shiftDayKey } from '../host/time.js'
 
 const ZONE = 'Asia/Shanghai'
 const time = Date.UTC(2026, 10, 4, 2, 0)
@@ -217,4 +217,244 @@ test('dayStartMs returns a finite instant for a DST boundary', () => {
   const start = dayStartMs('2026-09-06', 'America/Santiago')
   assert.ok(Number.isFinite(start))
   assert.ok(Number.isFinite(dayStartMs('2026-03-08', 'America/Havana')))
+})
+
+const FIXED_NOW = Date.UTC(2026, 10, 9, 6, 0) // 2026-11-09 14:00 Asia/Singapore
+
+/** Run `body` with a frozen clock so "today" cannot move mid-assertion. */
+async function withFrozenNow(nowMs, body) {
+  const realNow = Date.now
+  Date.now = () => nowMs
+  try {
+    return await body()
+  } finally {
+    Date.now = realNow
+  }
+}
+
+function usageBucket(date, tokens) {
+  return {
+    date, inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    totalTokens: tokens, costCny: 0.5, models: {},
+  }
+}
+
+async function tempZoneStore(prefix, { refreshMs = 0, zoneRebuildMs = 0 } = {}) {
+  const home = await mkdtemp(path.join(os.tmpdir(), prefix))
+  const sessionDir = path.join(home, 'sessions', 'proj', 'session-zone')
+  await mkdir(sessionDir, { recursive: true })
+  const lines = [
+    { type: 'session', version: 4, id: 'zone-session', createdAt: FIXED_NOW - 5000, cwd: '/tmp/demo' },
+    { type: 'assistant/message', seq: 1, time: FIXED_NOW, data: { turn: 1, step: 1, usage: { inputTokens: 7, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } },
+  ]
+  await writeFile(
+    path.join(sessionDir, 'session.v4.jsonl'),
+    lines.map((line) => JSON.stringify(line)).join('\n'),
+  )
+  const store = new StatsStore(resolveConfig({
+    scope: 'all', trendDays: 7, timeZone: ZONE, refreshMs, zoneRebuildMs, dshHome: home,
+    sessionsRoot: path.join(home, 'sessions'),
+  }))
+  return { home, store }
+}
+
+test('today scope buckets the day in the requested display zone', async () => {
+  await withFrozenNow(FIXED_NOW, () => {
+    const store = new StatsStore(resolveConfig({
+      scope: 'all', trendDays: 7, timeZone: ZONE, refreshMs: 0,
+      dshHome: '/tmp/dsh-hardening', sessionsRoot: '/tmp/dsh-hardening/sessions',
+    }))
+    const todayKey = dayKeyOf(FIXED_NOW, 'Asia/Tokyo')
+    const yesterdayKey = shiftDayKey(todayKey, -1)
+    store.parsed = [{
+      ...session('zone-session', FIXED_NOW, 30),
+      days: {
+        [yesterdayKey]: usageBucket(yesterdayKey, 10),
+        [todayKey]: usageBucket(todayKey, 20),
+      },
+    }]
+
+    const today = store.buildSnapshot(1, 'Asia/Tokyo')
+    assert.equal(today.scope, 1)
+    assert.equal(today.timeZone, 'Asia/Tokyo')
+    assert.equal(today.daily.length, 1)
+    assert.equal(today.daily[0].date, todayKey)
+    assert.equal(today.daily[0].totalTokens, 20)
+    assert.equal(today.totals.totalTokens, 20)
+    assert.equal(today.previousDaily.length, 1)
+    assert.equal(today.previousDaily[0].date, yesterdayKey)
+    assert.equal(today.previous.totalTokens, 10)
+    // The KPI baseline for a scoped view is the window start, not the first
+    // session ever recorded (which can be months older).
+    assert.equal(today.since, dayStartMs(todayKey, 'Asia/Tokyo'))
+
+    // A missing or invalid request zone falls back to the configured zone.
+    assert.equal(store.buildSnapshot(1).timeZone, ZONE)
+    assert.equal(store.buildSnapshot(1, 'Not/AZone').timeZone, ZONE)
+  })
+})
+
+test('switching calendars rebuilds the corpus without mixing zones', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-zones-')
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      const utc = await store.snapshot(1, true, 'UTC')
+      assert.equal(utc.timeZone, 'UTC')
+      assert.equal(utc.daily.length, 1)
+      assert.equal(utc.daily[0].date, dayKeyOf(FIXED_NOW, 'UTC'))
+      assert.equal(utc.totals.totalTokens, 7)
+      assert.equal(store.cacheZone, 'UTC')
+      const utcCorpus = store.parsed
+
+      const tokyo = await store.snapshot(1, true, 'Asia/Tokyo')
+      assert.equal(tokyo.timeZone, 'Asia/Tokyo')
+      assert.equal(tokyo.daily.length, 1)
+      assert.equal(tokyo.daily[0].date, dayKeyOf(FIXED_NOW, 'Asia/Tokyo'))
+      assert.equal(tokyo.totals.totalTokens, 7)
+      assert.equal(store.cacheZone, 'Asia/Tokyo')
+      assert.equal(store.files.size, 1, 'a zone switch rebuilds the per-file cache')
+      assert.notEqual(store.parsed[0], utcCorpus[0], 'a different calendar is re-parsed')
+
+      // The previous calendar is kept as the single alternate, so switching
+      // back must not parse the log again.
+      const backToUtc = await store.snapshot(1, false, 'UTC')
+      assert.equal(backToUtc.timeZone, 'UTC')
+      assert.equal(backToUtc.daily[0].date, dayKeyOf(FIXED_NOW, 'UTC'))
+      assert.equal(backToUtc.totals.totalTokens, 7)
+      assert.equal(store.parsed[0], utcCorpus[0], 'the alternate corpus is restored, not re-parsed')
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('concurrent snapshots for different zones keep their own calendars', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-race-')
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      // Serialized zone switches must still return each request's own calendar;
+      // a shared cache that mixed the scans would attribute the sample to the
+      // wrong day or lose it entirely.
+      const zones = ['UTC', 'Asia/Tokyo', 'UTC', 'America/New_York']
+      const snapshots = await Promise.all(zones.map((zone) => store.snapshot(1, false, zone)))
+      snapshots.forEach((snapshot, index) => {
+        assert.equal(snapshot.timeZone, zones[index])
+        assert.equal(snapshot.daily.length, 1)
+        assert.equal(snapshot.daily[0].date, dayKeyOf(FIXED_NOW, zones[index]))
+        assert.equal(snapshot.totals.totalTokens, 7)
+      })
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('concurrent snapshots for one zone share a single scan', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-dedupe-', { refreshMs: 1500 })
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      const realScan = store.scan.bind(store)
+      let scans = 0
+      store.scan = (...args) => {
+        scans += 1
+        return realScan(...args)
+      }
+      const snapshots = await Promise.all(Array.from({ length: 5 }, () => store.snapshot(1, false, 'UTC')))
+      assert.equal(scans, 1, 'waiters reuse the finished scan instead of scanning again')
+      assert.ok(snapshots.every((snapshot) => snapshot.timeZone === 'UTC' && snapshot.totals.totalTokens === 7))
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a zone switch with identical calendar days reuses the parsed corpus', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-same-calendar-')
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      const shanghai = await store.snapshot(1, true, ZONE)
+      assert.equal(shanghai.totals.totalTokens, 7)
+      const corpus = store.parsed
+
+      // Asia/Shanghai and Asia/Singapore are both UTC+8 all year: the same
+      // session object must survive without being parsed again.
+      const singapore = await store.snapshot(1, false, 'Asia/Singapore')
+      assert.equal(singapore.timeZone, 'Asia/Singapore')
+      assert.equal(singapore.daily[0].date, dayKeyOf(FIXED_NOW, 'Asia/Singapore'))
+      assert.equal(singapore.totals.totalTokens, 7)
+      assert.equal(store.parsed[0], corpus[0], 'equal calendars are relabelled, not re-parsed')
+      assert.equal(store.cacheZone, 'Asia/Singapore')
+
+      // A different offset rebuilds the corpus.
+      const utc = await store.snapshot(1, false, 'UTC')
+      assert.equal(utc.timeZone, 'UTC')
+      assert.equal(utc.daily[0].date, dayKeyOf(FIXED_NOW, 'UTC'))
+      assert.equal(utc.totals.totalTokens, 7)
+      assert.notEqual(store.parsed[0], corpus[0], 'different calendars are re-parsed')
+      assert.equal(store.cacheZone, 'UTC')
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('zone rebuilds are throttled when several calendars flap', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-throttle-', { zoneRebuildMs: 60_000 })
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      const utc = await store.snapshot(1, true, 'UTC')
+      assert.equal(utc.timeZone, 'UTC')
+      assert.equal(store.cacheZone, 'UTC')
+      // A third calendar inside the throttle window keeps serving the current
+      // corpus; the response reports the calendar it actually used.
+      const deferred = await store.snapshot(1, false, 'America/New_York')
+      assert.equal(deferred.timeZone, 'UTC')
+      assert.equal(store.cacheZone, 'UTC')
+      assert.equal(deferred.totals.totalTokens, 7)
+    })
+    await withFrozenNow(FIXED_NOW + 60_000, async () => {
+      const rebuilt = await store.snapshot(1, false, 'America/New_York')
+      assert.equal(rebuilt.timeZone, 'America/New_York')
+      assert.equal(store.cacheZone, 'America/New_York')
+      assert.equal(rebuilt.totals.totalTokens, 7)
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('sameCalendar checks only days a view can aggregate', async () => {
+  await withFrozenNow(FIXED_NOW, () => {
+    const store = new StatsStore(resolveConfig({
+      scope: 'all', trendDays: 7, timeZone: 'America/Sao_Paulo', refreshMs: 0,
+      dshHome: '/tmp/dsh-hardening', sessionsRoot: '/tmp/dsh-hardening/sessions',
+    }))
+    // Sao Paulo and Buenos Aires are both UTC-3 today but differed by one hour
+    // in 2018. Buckets that old can never re-enter a scoped window, so the
+    // corpus labels are still compatible.
+    store.cacheDays = new Set(['2018-01-15', dayKeyOf(FIXED_NOW, 'America/Sao_Paulo')])
+    assert.equal(store.sameCalendar('America/Argentina/Buenos_Aires'), true)
+    assert.equal(store.sameCalendar('UTC'), false)
+    // A truncated listing may hide buckets this check cannot see.
+    store.truncated = true
+    assert.equal(store.sameCalendar('America/Argentina/Buenos_Aires'), false)
+  })
+})
+
+test('store-level snapshots fall back to the configured zone', async () => {
+  const { home, store } = await tempZoneStore('dsh-stats-fallback-')
+  try {
+    await withFrozenNow(FIXED_NOW, async () => {
+      const tokyo = await store.snapshot(1, true, 'Asia/Tokyo')
+      assert.equal(tokyo.timeZone, 'Asia/Tokyo')
+      // Direct callers (no browser zone) get the documented configured zone,
+      // not whichever zone the last browser used.
+      const fallback = await store.snapshot(1, false, 'Not/AZone')
+      assert.equal(fallback.timeZone, ZONE)
+      assert.equal(fallback.totals.totalTokens, 7)
+      assert.equal(store.cacheZone, ZONE)
+    })
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
 })

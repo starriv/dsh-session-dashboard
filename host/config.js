@@ -9,6 +9,7 @@ export const DEFAULT_CONFIG = {
   trendDays: 30,
   timeZone: 'Asia/Shanghai',
   refreshMs: 1500,
+  zoneRebuildMs: 30_000,
   runtimeSampleMs: 5000,
   historySize: 60,
   idleGapMinutes: 10,
@@ -33,6 +34,9 @@ export function resolveConfig(raw) {
     timeZone: resolveTimeZone(config.timeZone, DEFAULT_CONFIG.timeZone),
     refreshMs: integer(config.refreshMs, DEFAULT_CONFIG.refreshMs, 500, 60_000),
     backgroundScanMs: integer(config.backgroundScanMs, 60_000, 10_000, 3_600_000),
+    // Minimum spacing between whole-corpus rebuilds caused by switching to a
+    // calendar-day-incompatible display zone. 0 disables the guard.
+    zoneRebuildMs: integer(config.zoneRebuildMs, DEFAULT_CONFIG.zoneRebuildMs, 0, 3_600_000),
     runtimeSampleMs: integer(config.runtimeSampleMs, DEFAULT_CONFIG.runtimeSampleMs, 1000, 60_000),
     historySize: integer(config.historySize, DEFAULT_CONFIG.historySize, 2, 600),
     // Idle stretches longer than this do not count as session time. Kept in

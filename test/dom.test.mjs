@@ -81,9 +81,16 @@ test('StatsPage loads a snapshot and renders the full dashboard in the DOM', asy
     try {
       let html = mounted.getHtml()
       assert.ok(mounted.urls.some((url) => url.includes('scope=all')))
+      const firstRequest = new URL(mounted.urls[0], 'http://session-stats.local')
+      assert.ok(firstRequest.searchParams.get('tz'), 'the browser zone is sent to the Host')
+      assert.ok(
+        mounted.urls.every((url) => new URL(url, 'http://session-stats.local').searchParams.get('tz')),
+        'every snapshot request carries the browser zone',
+      )
       assert.match(html, /1\.17B/)
       assert.match(html, /99\.65%/)
       assert.match(html, /全部时间/)
+      assert.match(html, /今日/)
       assert.match(html, /近 7 天/)
       assert.match(html, /季度数据质量审计/)
       assert.match(html, /ss-bar-segment/)
@@ -97,6 +104,13 @@ test('StatsPage loads a snapshot and renders the full dashboard in the DOM', asy
       assert.ok(!html.includes('NaN'))
       assert.ok(!html.includes('正在读取本机会话日志'))
 
+      await mounted.clickScope('今日')
+      html = mounted.getHtml()
+      assert.ok(mounted.urls.some((url) => new URL(url, 'http://session-stats.local').searchParams.get('scope') === '1'))
+      assert.match(html, /Token 堆叠 · 今日/)
+      assert.match(html, /900M/)
+      assert.ok(!html.includes('1\.17B'))
+
       await mounted.clickScope('近 7 天')
       html = mounted.getHtml()
       assert.ok(mounted.urls.some((url) => url.includes('scope=7')))
@@ -107,6 +121,7 @@ test('StatsPage loads a snapshot and renders the full dashboard in the DOM', asy
       html = mounted.getHtml()
       assert.match(html, /Session Stats/)
       assert.match(html, /Last 7 days/)
+      assert.match(html, /Today/)
     } finally {
       await mounted.cleanup()
     }

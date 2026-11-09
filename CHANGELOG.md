@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.4.0
+
+- The range selector now includes 「今日」/“Today”: one click turns the KPI
+  strip, daily chart, token composition and session ranking into a view of the
+  current local day (00:00 to now). Its comparison period is yesterday.
+- Calendar days follow the **user's browser time zone**, not the Host's. The
+  client sends its IANA zone (`tz`) with every snapshot request, and the Host
+  buckets days, scopes and previous-period windows in that zone. The configured
+  `timeZone` remains the fallback when no browser zone is supplied (for example
+  a non-browser client) and still decides the peak/idle pricing windows.
+- All ranges use the same user-zone calendar, so switching between 今日, 7/14/30
+  days and all-time cannot shift a session across day buckets. When the display
+  zone changes, the Host re-parses the corpus for the new zone and serializes
+  zone switches so one snapshot never mixes two calendars. Zones that produce
+  identical day boundaries (for example two UTC+8 zones) are relabelled without
+  a re-parse, and the previous calendar is kept as a single alternate corpus so
+  two browser zones polling in turn do not re-read the logs per request. Invalid
+  zones fall back to the configured zone instead of failing the request.
+- Whole-corpus rebuilds caused by switching between incompatible display
+  calendars are throttled by `zoneRebuildMs` (default 30 s, `0` disables).
+  Requests made inside that window keep the current calendar and report it in
+  the response's `timeZone`; two alternating calendars are served from the
+  spare corpus and never wait.
+- The KPI baseline for scoped views (7/14/30/today) now starts at the selected
+  window instead of the first session ever recorded, so the "since" context can
+  no longer predate the window; all-time views keep the historical start date.
+- Add Host/client tests for zone rebucketing and throttling, `scope=1` today
+  snapshots, scoped baselines, invalid `tz` fallback, the browser-zone request
+  parameter and the 今日 card label.
+
 ## 1.3.0
 
 - Session ranking now shows **two duration columns** instead of one:
