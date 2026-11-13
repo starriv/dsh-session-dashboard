@@ -19,6 +19,11 @@ ${i("kpi.cost.title")}`},{key:"avg",icon:F.createElement(Kn),label:i("kpi.avg"),
   --ss-data-money: color-mix(in srgb, var(--dsw-alias-state-success-primary) 48%, var(--dsw-alias-label-primary));
   --ss-data-input: color-mix(in srgb, var(--dsw-alias-label-secondary) 72%, var(--dsw-alias-label-primary));
   --ss-data-write: color-mix(in srgb, var(--dsw-alias-brand-primary) 52%, var(--dsw-alias-label-secondary));
+  /* Loading placeholders need an opaque tint: \`--dsw-alias-bg-layer-2\` is a
+     pure surface colour and some themes set it to the card background itself,
+     which made the skeleton invisible except for its moving highlight. */
+  --ss-skeleton-base: color-mix(in srgb, var(--dsw-alias-label-secondary) 9%, var(--dsw-alias-bg-layer-2));
+  --ss-skeleton-shine: color-mix(in srgb, var(--dsw-alias-label-secondary) 17%, var(--dsw-alias-bg-layer-2));
   box-sizing: border-box;
   height: 100%;
   min-height: 100%;
@@ -427,9 +432,9 @@ ${i("kpi.cost.title")}`},{key:"avg",icon:F.createElement(Kn),label:i("kpi.avg"),
   border-radius: 7px;
   background: linear-gradient(
     100deg,
-    var(--dsw-alias-bg-layer-2) 20%,
-    color-mix(in srgb, var(--dsw-alias-label-secondary) 14%, var(--dsw-alias-bg-layer-2)) 38%,
-    var(--dsw-alias-bg-layer-2) 56%
+    var(--ss-skeleton-base) 20%,
+    var(--ss-skeleton-shine) 38%,
+    var(--ss-skeleton-base) 56%
   );
   background-size: 220% 100%;
   animation: ss-shimmer 1.5s ease-in-out infinite;
@@ -1310,7 +1315,7 @@ ${i("kpi.cost.title")}`},{key:"avg",icon:F.createElement(Kn),label:i("kpi.avg"),
   position: absolute;
   inset: 8%;
   border-radius: 50%;
-  border: 20px solid var(--dsw-alias-bg-layer-2);
+  border: 20px solid var(--ss-skeleton-base);
   background: transparent;
   animation: none;
 }
@@ -1321,6 +1326,15 @@ ${i("kpi.cost.title")}`},{key:"avg",icon:F.createElement(Kn),label:i("kpi.avg"),
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+
+/* Keep the center placeholders inside the ring's inner circle. */
+.ss-donut-skeleton-center .ss-skeleton-value {
+  width: 84px;
+}
+
+.ss-donut-skeleton-center .ss-skeleton-sub {
+  width: 64px;
 }
 
 .ss-composition-value-skeleton {

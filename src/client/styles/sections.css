@@ -795,7 +795,7 @@
   position: absolute;
   inset: 8%;
   border-radius: 50%;
-  border: 20px solid var(--dsw-alias-bg-layer-2);
+  border: 20px solid var(--ss-skeleton-base);
   background: transparent;
   animation: none;
 }
@@ -806,6 +806,15 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+
+/* Keep the center placeholders inside the ring's inner circle. */
+.ss-donut-skeleton-center .ss-skeleton-value {
+  width: 84px;
+}
+
+.ss-donut-skeleton-center .ss-skeleton-sub {
+  width: 64px;
 }
 
 .ss-composition-value-skeleton {
