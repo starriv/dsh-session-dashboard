@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-dashboard",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": false,
   "description": "Session stats dashboard plugin for the DeepSeek Harness Web GUI: token usage, estimated cost, composition and host runtime health.",
   "type": "module",

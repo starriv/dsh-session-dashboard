@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.2
+
+- Keep the loading placeholders visible under current DSH themes. The skeleton
+  base was `--dsw-alias-bg-layer-2`, which these themes resolve to the card
+  surface itself, so only the moving shimmer could be seen while a range
+  loaded. The placeholder now mixes the secondary label into that surface for
+  its base and highlight, and the donut placeholder keeps its center bars
+  inside the ring.
+- Refresh the README screenshots for the 1.4 UI from the synthetic fixture: the
+  Today range entry, the active/total duration columns, the all-time baseline
+  KPI strip and the mid-switch loading state at 1440, 1024 and 390.
+
 ## 1.4.1
 
 - Fix the built-in `deepseek-v4-pro` **peak output** price: 13.5 → 27.0 CNY per
