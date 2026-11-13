@@ -17,15 +17,15 @@ DSH 会话日志，提供 Token 用量、费用估算、每日趋势、Token 构
 
 | 浅色 · 1440 | 深色 · 1440 |
 | --- | --- |
-| ![浅色界面](docs/design-preview-light.png) | ![深色界面](docs/design-preview-dark.png) |
+| ![浅色界面](docs/design-preview-light.png?v=1.4.2) | ![深色界面](docs/design-preview-dark.png?v=1.4.2) |
 
 | 平板 · 1024 | 手机 · 390（无横向滚动） |
 | --- | --- |
-| ![平板界面](docs/design-preview-1024.png) | ![手机界面](docs/design-preview-mobile.png) |
+| ![平板界面](docs/design-preview-1024.png?v=1.4.2) | ![手机界面](docs/design-preview-mobile.png?v=1.4.2) |
 
 切换范围时的加载占位：
 
-![加载占位](docs/design-preview-pending.png)
+![加载占位](docs/design-preview-pending.png?v=1.4.2)
 
 ## 功能
 
